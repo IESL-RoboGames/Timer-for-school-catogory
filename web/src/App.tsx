@@ -48,6 +48,7 @@ type PendingStop = {
 }
 
 type ResultEntry = {
+  id: string
   team: string
   startTime: number
   endTime: number
@@ -83,6 +84,9 @@ type WsEvent =
     }
   | {
       event: 'RESET'
+    }
+  | {
+      event: 'RESULTS_UPDATED'
     }
 
 const API_BASE = (import.meta.env.VITE_API_BASE as string | undefined)?.replace(/\/$/, '') ?? ''
@@ -434,6 +438,12 @@ function App() {
           return
         }
 
+        if (data.event === 'RESULTS_UPDATED') {
+          if (role === 'admin' || role === 'judge') {
+            void fetchResults()
+          }
+        }
+
         if (data.event === 'CHARGE_START') {
           setSession((prev) => {
             if (!prev) return prev
@@ -649,6 +659,38 @@ function App() {
     } catch (err) {
       console.error('Reset error:', err)
       setError('Cannot reach backend when resetting timer.')
+    }
+  }
+
+  const hideRecord = async (id: string) => {
+    if (!window.confirm('Hide this record from the display?')) {
+      return
+    }
+
+    try {
+      const response = await fetch(apiUrl('/hide-result'), {
+        method: 'POST',
+        headers: adminHeaders(adminToken),
+        body: JSON.stringify({ id }),
+      })
+
+      if (!response.ok) {
+        let errorMessage = 'Failed to hide record'
+        try {
+          const payload = (await response.json()) as { error?: string }
+          errorMessage = payload.error ?? errorMessage
+        } catch {
+          // Fallback
+        }
+        setError(errorMessage)
+        return
+      }
+
+      setError(null)
+      void fetchResults()
+    } catch (err) {
+      console.error('Hide error:', err)
+      setError('Cannot reach backend to hide record.')
     }
   }
 
@@ -897,12 +939,13 @@ function App() {
                         <TableCell>#</TableCell>
                         <TableCell>Team</TableCell>
                         <TableCell align="right">Time</TableCell>
+                        {role === 'admin' && <TableCell align="right">Actions</TableCell>}
                       </TableRow>
                     </TableHead>
                     <TableBody>
                       {results.length === 0 && (
                         <TableRow>
-                          <TableCell colSpan={3} align="center">
+                          <TableCell colSpan={role === 'admin' ? 4 : 3} align="center">
                             No finished teams yet
                           </TableCell>
                         </TableRow>
@@ -914,6 +957,13 @@ function App() {
                           <TableCell align="right" sx={{ fontFamily: '"Roboto Mono", monospace' }}>
                             {formatTime(result.elapsedMs)}
                           </TableCell>
+                          {role === 'admin' && (
+                            <TableCell align="right">
+                              <Button size="small" color="error" onClick={() => hideRecord(result.id)}>
+                                Hide
+                              </Button>
+                            </TableCell>
+                          )}
                         </TableRow>
                       ))}
                     </TableBody>

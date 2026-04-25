@@ -13,6 +13,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"go.mongodb.org/mongo-driver/bson"
+	"go.mongodb.org/mongo-driver/bson/primitive"
 	"go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/mongo/options"
 	"golang.org/x/crypto/bcrypt"
@@ -603,6 +604,7 @@ func (h *Handler) GetResults(c *gin.Context) {
 		}
 
 		results = append(results, gin.H{
+			"id":        session.ID.Hex(),
 			"team":      session.Team,
 			"startTime": session.StartTime,
 			"endTime":   session.EndTime,
@@ -616,6 +618,40 @@ func (h *Handler) GetResults(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{"results": results})
+}
+
+func (h *Handler) HideSession(c *gin.Context) {
+	if !h.authorizeAdmin(c) {
+		return
+	}
+
+	var req struct {
+		ID string `json:"id"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	objID, err := primitive.ObjectIDFromHex(req.ID)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid id"})
+		return
+	}
+
+	dbCtx, cancel := context.WithTimeout(context.Background(), mongoOpTimeout)
+	defer cancel()
+
+	_, err = h.db.Collection("sessions").UpdateByID(dbCtx, objID, bson.M{
+		"$set": bson.M{"status": "hidden"},
+	})
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	h.hub.Broadcast(gin.H{"event": "RESULTS_UPDATED"})
+	c.JSON(http.StatusOK, gin.H{"status": "ok"})
 }
 
 func (h *Handler) ServeWs(c *gin.Context) {
