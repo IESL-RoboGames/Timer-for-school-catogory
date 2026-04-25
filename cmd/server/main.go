@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"log"
-	"os"
 	"time"
 
 	"robogames-timer/internal/handlers"
@@ -11,41 +10,20 @@ import (
 
 	"github.com/gin-contrib/cors"
 	"github.com/gin-gonic/gin"
-	"github.com/joho/godotenv"
 	"go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/mongo/options"
 )
 
 func main() {
-	// 0. Load .env
-	if err := godotenv.Load(); err != nil {
-		log.Println("No .env file found, using default environment variables")
-	}
-
-	mongoURI := os.Getenv("MONGODB_URI")
-	if mongoURI == "" {
-		mongoURI = "mongodb://localhost:27017"
-	}
-	
-	port := os.Getenv("PORT")
-	if port == "" {
-		port = "8080"
-	}
-
-	dbName := os.Getenv("DB_NAME")
-	if dbName == "" {
-		dbName = "robogames"
-	}
-
 	// 1. Database Setup
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	client, err := mongo.Connect(ctx, options.Client().ApplyURI(mongoURI))
+	client, err := mongo.Connect(ctx, options.Client().ApplyURI("mongodb://localhost:27017"))
 	if err != nil {
 		log.Fatal(err)
 	}
-	db := client.Database(dbName)
+	db := client.Database("robogames")
 
 	// 2. WebSocket Hub Setup
 	hub := websocket.NewHub()
@@ -73,8 +51,8 @@ func main() {
 	r.GET("/ws", h.ServeWs)
 
 	// Start Server
-	log.Printf("Server starting on :%s...\n", port)
-	if err := r.Run(":" + port); err != nil {
+	log.Println("Server starting on :8080...")
+	if err := r.Run(":8080"); err != nil {
 		log.Fatal(err)
 	}
 }
