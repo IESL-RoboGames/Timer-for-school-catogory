@@ -24,12 +24,13 @@ export function TimerDisplay({ ms, isFinished, isRunning, size = 'large' }: Time
       sx={{
         fontFamily: '"Roboto Mono", monospace',
         fontSize: size === 'large' 
-          ? { xs: '5rem', sm: '10rem', md: '15rem' } 
-          : '2rem',
+          ? { xs: '22vmin', sm: '24vmin', md: '26vmin' } 
+          : { xs: '10vmin', sm: '8vmin', md: '7vmin' },
         fontWeight: 900,
-        lineHeight: 1,
+        lineHeight: 0.9,
         color: color,
-        textShadow: size === 'large' ? '0 0 20px rgba(0,0,0,0.5)' : 'none',
+        textShadow: size === 'large' ? '0 0 40px rgba(0,0,0,0.3)' : 'none',
+        whiteSpace: 'nowrap',
       }}
     >
       {formatTime(ms)}

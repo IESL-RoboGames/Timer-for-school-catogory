@@ -47,14 +47,14 @@ export function ResultsTable({ results, role, onHide }: ResultsTableProps) {
             return (
               <TableRow key={`${result.id}-${index}`} sx={{ '&:last-child td, &:last-child th': { border: 0 } }}>
                 <TableCell>{index + 1}</TableCell>
-                <TableCell sx={{ color: teamColor, fontWeight: 800, fontSize: '1rem' }}>
+                <TableCell sx={{ color: teamColor, fontWeight: 800, fontSize: { xs: '3vw', sm: '1.2rem' } }}>
                   {result.team}
                 </TableCell>
-                <TableCell>RD {result.round}</TableCell>
-                <TableCell align="right" sx={{ fontFamily: '"Roboto Mono", monospace', fontWeight: 700 }}>
+                <TableCell sx={{ fontSize: { xs: '2.5vw', sm: '0.875rem' } }}>RD {result.round}</TableCell>
+                <TableCell align="right" sx={{ fontFamily: '"Roboto Mono", monospace', fontWeight: 700, fontSize: { xs: '3vw', sm: '1rem' } }}>
                   {formatTime(result.elapsedMs)}
                 </TableCell>
-                <TableCell align="right" sx={{ fontFamily: '"Roboto Mono", monospace', color: 'text.secondary' }}>
+                <TableCell align="right" sx={{ fontFamily: '"Roboto Mono", monospace', color: 'text.secondary', fontSize: { xs: '2.5vw', sm: '0.875rem' } }}>
                   {formatTime(result.chargeMs)}
                 </TableCell>
                 {isAdmin && onHide && (
