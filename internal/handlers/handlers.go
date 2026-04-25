@@ -99,7 +99,11 @@ func (h *Handler) StartTimer(c *gin.Context) {
 	startTime := time.Now().UnixMilli()
 	session := models.Session{ Team: req.Team, Round: req.Round, StartTime: startTime, Status: "running" }
 	dbCtx, cancel := context.WithTimeout(context.Background(), mongoOpTimeout); defer cancel()
-	res, _ := h.db.Collection("sessions").InsertOne(dbCtx, session)
+	res, err := h.db.Collection("sessions").InsertOne(dbCtx, session)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to save session"})
+		return
+	}
 	h.hub.Broadcast(gin.H{"event": "START", "team": req.Team, "round": req.Round, "startTime": startTime, "sessionId": res.InsertedID})
 	c.JSON(http.StatusOK, session)
 }
@@ -108,7 +112,11 @@ func (h *Handler) StopTimer(c *gin.Context) {
 	if !h.authorizeAdmin(c) { return }
 	var req struct { StopTime float64 `json:"stopTime"` }
 	c.ShouldBindJSON(&req)
-	session, _ := h.ProcessStop(int64(math.Round(req.StopTime)), "", "web")
+	session, err := h.ProcessStop(int64(math.Round(req.StopTime)), "", "web")
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
 	c.JSON(http.StatusOK, session)
 }
 
@@ -120,10 +128,11 @@ func (h *Handler) ProcessStop(stopTime int64, requestID, source string) (*models
 	update := bson.M{"$set": bson.M{"endTime": stopTime, "status": "paused"}}
 	opts := options.FindOneAndUpdate().SetReturnDocument(options.After)
 	var updated models.Session
-	h.db.Collection("sessions").FindOneAndUpdate(dbCtx, bson.M{"_id": latest.ID}, update, opts).Decode(&updated)
+	err := h.db.Collection("sessions").FindOneAndUpdate(dbCtx, bson.M{"_id": latest.ID}, update, opts).Decode(&updated)
+	if err != nil { return nil, err }
 	
 	if updated.ChargeStatus == "running" {
-		h.db.Collection("sessions").UpdateByID(dbCtx, updated.ID, bson.M{"$set": bson.M{"chargeEndTime": stopTime, "chargeStatus": "finished"}})
+		_, _ = h.db.Collection("sessions").UpdateByID(dbCtx, updated.ID, bson.M{"$set": bson.M{"chargeEndTime": stopTime, "chargeStatus": "finished"}})
 		updated.ChargeEndTime = stopTime; updated.ChargeStatus = "finished"
 		h.hub.Broadcast(gin.H{"event": "CHARGE_STOP", "team": updated.Team, "chargeEndTime": stopTime})
 	}
@@ -136,7 +145,11 @@ func (h *Handler) FinishTimer(c *gin.Context) {
 	dbCtx, cancel := context.WithTimeout(context.Background(), mongoOpTimeout); defer cancel()
 	latest, _ := h.getLatestSession()
 	if latest != nil {
-		h.db.Collection("sessions").UpdateByID(dbCtx, latest.ID, bson.M{"$set": bson.M{"status": "finished"}})
+		_, err := h.db.Collection("sessions").UpdateByID(dbCtx, latest.ID, bson.M{"$set": bson.M{"status": "finished"}})
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to finish session"})
+			return
+		}
 	}
 	h.hub.Broadcast(gin.H{"event": "RESET"})
 	c.JSON(http.StatusOK, gin.H{"status": "ok"})
@@ -146,13 +159,20 @@ func (h *Handler) ResumeTimer(c *gin.Context) {
 	if !h.authorizeAdmin(c) { return }
 	dbCtx, cancel := context.WithTimeout(context.Background(), mongoOpTimeout); defer cancel()
 	latest, _ := h.getLatestSession()
-	if latest == nil { return }
+	if latest == nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "no session to resume"})
+		return
+	}
 	elapsed := latest.EndTime - latest.StartTime
 	newStart := time.Now().UnixMilli() - elapsed
 	update := bson.M{"$set": bson.M{"startTime": newStart, "status": "running"}, "$unset": bson.M{"endTime": ""}}
 	var updated models.Session
 	opts := options.FindOneAndUpdate().SetReturnDocument(options.After)
-	h.db.Collection("sessions").FindOneAndUpdate(dbCtx, bson.M{"_id": latest.ID}, update, opts).Decode(&updated)
+	err := h.db.Collection("sessions").FindOneAndUpdate(dbCtx, bson.M{"_id": latest.ID}, update, opts).Decode(&updated)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to resume"})
+		return
+	}
 	h.hub.Broadcast(gin.H{"event": "START", "team": updated.Team, "round": updated.Round, "startTime": updated.StartTime})
 	c.JSON(http.StatusOK, updated)
 }
@@ -161,7 +181,9 @@ func (h *Handler) ResetTimer(c *gin.Context) {
 	if !h.authorizeAdmin(c) { return }
 	dbCtx, cancel := context.WithTimeout(context.Background(), mongoOpTimeout); defer cancel()
 	latest, _ := h.getLatestSession()
-	if latest != nil { h.db.Collection("sessions").UpdateByID(dbCtx, latest.ID, bson.M{"$set": bson.M{"status": "cancelled"}}) }
+	if latest != nil { 
+		_, _ = h.db.Collection("sessions").UpdateByID(dbCtx, latest.ID, bson.M{"$set": bson.M{"status": "cancelled"}}) 
+	}
 	h.hub.Broadcast(gin.H{"event": "RESET"})
 	c.JSON(http.StatusOK, gin.H{"status": "ok"})
 }
@@ -176,24 +198,21 @@ func (h *Handler) GetState(c *gin.Context) {
 func (h *Handler) GetResults(c *gin.Context) {
 	if !h.authorizeAdmin(c) { return }
 	dbCtx, cancel := context.WithTimeout(context.Background(), mongoOpTimeout); defer cancel()
-	cursor, _ := h.db.Collection("sessions").Find(dbCtx, bson.M{"status": "finished"}, options.Find().SetSort(bson.M{"_id": -1}))
+	cursor, err := h.db.Collection("sessions").Find(dbCtx, bson.M{"status": "finished"}, options.Find().SetSort(bson.M{"_id": -1}))
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to fetch results"})
+		return
+	}
 	var res []models.Session
-	cursor.All(dbCtx, &res)
+	if err := cursor.All(dbCtx, &res); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to decode results"})
+		return
+	}
 	results := []gin.H{}
 	for _, s := range res {
-		elapsed := s.EndTime - s.StartTime
-		chargeDuration := int64(0)
-		if s.ChargeEndTime > s.ChargeStartTime && s.ChargeStartTime > 0 {
-			chargeDuration = s.ChargeEndTime - s.ChargeStartTime
-		}
-		
-		results = append(results, gin.H{
-			"id":        s.ID.Hex(),
-			"team":      s.Team,
-			"round":     s.Round,
-			"elapsedMs": elapsed,
-			"chargeMs":  chargeDuration,
-		})
+		charge := int64(0)
+		if s.ChargeEndTime > s.ChargeStartTime && s.ChargeStartTime > 0 { charge = s.ChargeEndTime - s.ChargeStartTime }
+		results = append(results, gin.H{"id": s.ID.Hex(), "team": s.Team, "round": s.Round, "elapsedMs": s.EndTime - s.StartTime, "chargeMs": charge})
 	}
 	c.JSON(http.StatusOK, gin.H{"results": results})
 }
@@ -201,9 +220,11 @@ func (h *Handler) GetResults(c *gin.Context) {
 func (h *Handler) HideSession(c *gin.Context) {
 	if !h.authorizeAdmin(c) { return }
 	var req struct { ID string `json:"id"` }
-	c.ShouldBindJSON(&req); objID, _ := primitive.ObjectIDFromHex(req.ID)
+	if err := c.ShouldBindJSON(&req); err != nil { return }
+	objID, err := primitive.ObjectIDFromHex(req.ID)
+	if err != nil { return }
 	dbCtx, cancel := context.WithTimeout(context.Background(), mongoOpTimeout); defer cancel()
-	h.db.Collection("sessions").UpdateByID(dbCtx, objID, bson.M{"$set": bson.M{"status": "hidden"}})
+	_, _ = h.db.Collection("sessions").UpdateByID(dbCtx, objID, bson.M{"$set": bson.M{"status": "hidden"}})
 	h.hub.Broadcast(gin.H{"event": "RESULTS_UPDATED"})
 	c.JSON(http.StatusOK, gin.H{"status": "ok"})
 }
@@ -214,7 +235,8 @@ func (h *Handler) StartChargingTimer(c *gin.Context) {
 	dbCtx, cancel := context.WithTimeout(context.Background(), mongoOpTimeout); defer cancel()
 	var updated models.Session
 	opts := options.FindOneAndUpdate().SetReturnDocument(options.After).SetSort(bson.M{"_id": -1})
-	h.db.Collection("sessions").FindOneAndUpdate(dbCtx, bson.M{"status": "running"}, bson.M{"$set": bson.M{"chargeStartTime": now, "chargeStatus": "running"}}, opts).Decode(&updated)
+	err := h.db.Collection("sessions").FindOneAndUpdate(dbCtx, bson.M{"status": "running"}, bson.M{"$set": bson.M{"chargeStartTime": now, "chargeStatus": "running"}}, opts).Decode(&updated)
+	if err != nil { return }
 	h.hub.Broadcast(gin.H{"event": "CHARGE_START", "team": updated.Team, "chargeStartTime": now})
 	c.JSON(http.StatusOK, updated)
 }
@@ -226,7 +248,8 @@ func (h *Handler) StopChargingTimer(c *gin.Context) {
 	dbCtx, cancel := context.WithTimeout(context.Background(), mongoOpTimeout); defer cancel()
 	var updated models.Session
 	opts := options.FindOneAndUpdate().SetReturnDocument(options.After).SetSort(bson.M{"_id": -1})
-	h.db.Collection("sessions").FindOneAndUpdate(dbCtx, bson.M{"status": "running", "chargeStatus": "running"}, bson.M{"$set": bson.M{"chargeEndTime": stop, "chargeStatus": "finished"}}, opts).Decode(&updated)
+	err := h.db.Collection("sessions").FindOneAndUpdate(dbCtx, bson.M{"status": "running", "chargeStatus": "running"}, bson.M{"$set": bson.M{"chargeEndTime": stop, "chargeStatus": "finished"}}, opts).Decode(&updated)
+	if err != nil { return }
 	h.hub.Broadcast(gin.H{"event": "CHARGE_STOP", "team": updated.Team, "chargeEndTime": stop})
 	c.JSON(http.StatusOK, updated)
 }
