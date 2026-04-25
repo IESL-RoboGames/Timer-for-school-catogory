@@ -20,9 +20,10 @@ Create `.env` in project root:
 MONGODB_URI=mongodb://localhost:27017
 DB_NAME=robogames
 PORT=8080
-# Optional protection (disabled by default)
+# Optional admin login (disabled by default)
 # ENABLE_ADMIN_AUTH=true
-# ADMIN_KEY=change-me
+# ADMIN_TOKEN=dev-admin-token
+# ADMIN_PASSWORD_HASH=$2a$10$.f8H.xrtQ8GLzb7L55DIWu0kjhneGUeQ4YyMzGYK9jVrUgzjlXh1u
 ```
 
 ## Local Development (No Docker)
@@ -38,10 +39,8 @@ make run-api
 make web-dev
 ```
 
-If you enable admin protection, set `VITE_ADMIN_KEY` in `web/.env` to match backend `ADMIN_KEY`:
-```env
-VITE_ADMIN_KEY=change-me
-```
+If admin login is enabled, open `/admin`, enter the admin password, and the app stores the returned token locally.
+Default password for the default hash is `admin123` (change this in production).
 
 3. Open screens:
 - `http://localhost:5173/admin`

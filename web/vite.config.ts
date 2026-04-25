@@ -6,6 +6,9 @@ export default defineConfig({
   plugins: [react()],
   server: {
     proxy: {
+      '/auth/login': {
+        target: 'http://localhost:8080',
+      },
       '/start': {
         target: 'http://localhost:8080',
       },
@@ -13,6 +16,9 @@ export default defineConfig({
         target: 'http://localhost:8080',
       },
       '/state': {
+        target: 'http://localhost:8080',
+      },
+      '/results': {
         target: 'http://localhost:8080',
       },
       '/ws': {

@@ -8,6 +8,12 @@ import {
   CssBaseline,
   Paper,
   Stack,
+  Table,
+  TableBody,
+  TableCell,
+  TableContainer,
+  TableHead,
+  TableRow,
   TextField,
   ThemeProvider,
   Typography,
@@ -27,6 +33,7 @@ type Session = {
 type StateResponse = {
   serverTime: number
   session: Session | null
+  authRequired?: boolean
   error?: string
 }
 
@@ -35,6 +42,18 @@ type PendingStop = {
   stopTime: number
   source: string
   createdAt: number
+}
+
+type ResultEntry = {
+  team: string
+  startTime: number
+  endTime: number
+  elapsedMs: number
+}
+
+type ResultsResponse = {
+  results: ResultEntry[]
+  error?: string
 }
 
 type WsEvent =
@@ -52,7 +71,8 @@ type WsEvent =
 
 const API_BASE = (import.meta.env.VITE_API_BASE as string | undefined)?.replace(/\/$/, '') ?? ''
 const WS_BASE = (import.meta.env.VITE_WS_BASE as string | undefined)?.replace(/\/$/, '')
-const ADMIN_KEY = (import.meta.env.VITE_ADMIN_KEY as string | undefined)?.trim() ?? ''
+const STATIC_ADMIN_TOKEN = (import.meta.env.VITE_ADMIN_KEY as string | undefined)?.trim() ?? ''
+const ADMIN_TOKEN_STORAGE_KEY = 'robogames-admin-token'
 
 const STOP_DB_NAME = 'robogames-timer-db'
 const STOP_STORE = 'stop_queue'
@@ -108,10 +128,10 @@ function buildTheme(role: 'admin' | 'judge' | 'public') {
   })
 }
 
-function adminHeaders(): HeadersInit {
+function adminHeaders(token: string): HeadersInit {
   const headers: Record<string, string> = { 'Content-Type': 'application/json' }
-  if (ADMIN_KEY) {
-    headers['X-Admin-Key'] = ADMIN_KEY
+  if (token) {
+    headers.Authorization = `Bearer ${token}`
   }
   return headers
 }
@@ -179,6 +199,13 @@ function App() {
   const [error, setError] = useState<string | null>(null)
   const [wsConnected, setWsConnected] = useState(false)
   const [pendingCount, setPendingCount] = useState(0)
+  const [results, setResults] = useState<ResultEntry[]>([])
+  const [authRequired, setAuthRequired] = useState(false)
+  const [adminToken, setAdminToken] = useState<string>(() => {
+    const stored = window.localStorage.getItem(ADMIN_TOKEN_STORAGE_KEY)
+    return stored?.trim() || STATIC_ADMIN_TOKEN
+  })
+  const [passwordInput, setPasswordInput] = useState('')
 
   const currentSessionRef = useRef<Session | null>(null)
   const wsRef = useRef<WebSocket | null>(null)
@@ -187,6 +214,20 @@ function App() {
   useEffect(() => {
     currentSessionRef.current = session
   }, [session])
+
+  const fetchResults = async () => {
+    try {
+      const response = await fetch(apiUrl('/results'))
+      const data = (await response.json()) as ResultsResponse
+      if (!response.ok) {
+        setError(data.error ?? 'Failed to load results')
+        return
+      }
+      setResults(data.results ?? [])
+    } catch {
+      setError('Failed to load judge results.')
+    }
+  }
 
   useEffect(() => {
     const syncTime = async () => {
@@ -197,6 +238,7 @@ function App() {
         const requestEnd = Date.now()
         const offset = (data.serverTime ?? Date.now()) - (requestStart + requestEnd) / 2
         setServerOffset(offset)
+        setAuthRequired(Boolean(data.authRequired))
 
         if (data.error) {
           setError(data.error)
@@ -215,6 +257,9 @@ function App() {
     }
 
     void syncTime()
+    if (role === 'judge') {
+      void fetchResults()
+    }
   }, [])
 
   useEffect(() => {
@@ -241,7 +286,7 @@ function App() {
     try {
       const response = await fetch(apiUrl('/stop'), {
         method: 'POST',
-        headers: adminHeaders(),
+        headers: adminHeaders(adminToken),
         body: JSON.stringify({
           stopTime: item.stopTime,
           requestId: item.id,
@@ -251,6 +296,10 @@ function App() {
 
       if (!response.ok) {
         const payload = (await response.json()) as { error?: string }
+        if (response.status === 401) {
+          setAdminToken('')
+          window.localStorage.removeItem(ADMIN_TOKEN_STORAGE_KEY)
+        }
         setError(payload.error ?? 'Stop request failed')
         return false
       }
@@ -308,6 +357,9 @@ function App() {
           }
           setSession(next)
           setError(null)
+          if (role === 'judge') {
+            void fetchResults()
+          }
           return
         }
 
@@ -323,6 +375,9 @@ function App() {
             endTime: data.endTime,
           })
           setError(null)
+          if (role === 'judge') {
+            void fetchResults()
+          }
 
           if (data.requestId) {
             void deletePendingStop(data.requestId).then(() => {
@@ -360,6 +415,9 @@ function App() {
     if (role !== 'admin') {
       return
     }
+    if (authRequired && !adminToken) {
+      return
+    }
 
     void flushPendingStops()
     const retry = window.setInterval(() => {
@@ -367,6 +425,16 @@ function App() {
     }, 2000)
 
     return () => window.clearInterval(retry)
+  }, [role, authRequired, adminToken])
+
+  useEffect(() => {
+    if (role !== 'judge') {
+      return
+    }
+    const poll = window.setInterval(() => {
+      void fetchResults()
+    }, 5000)
+    return () => window.clearInterval(poll)
   }, [role])
 
   const startTimer = async () => {
@@ -378,7 +446,7 @@ function App() {
     try {
       const response = await fetch(apiUrl('/start'), {
         method: 'POST',
-        headers: adminHeaders(),
+        headers: adminHeaders(adminToken),
         body: JSON.stringify({
           team: teamInput.trim(),
           source: 'admin-web',
@@ -387,6 +455,10 @@ function App() {
 
       if (!response.ok) {
         const payload = (await response.json()) as { error?: string }
+        if (response.status === 401) {
+          setAdminToken('')
+          window.localStorage.removeItem(ADMIN_TOKEN_STORAGE_KEY)
+        }
         setError(payload.error ?? 'Failed to start timer')
         return
       }
@@ -427,7 +499,7 @@ function App() {
             stopTime: item.stopTime,
             requestId: item.id,
             source: item.source,
-            adminKey: ADMIN_KEY,
+            adminKey: adminToken,
           }),
         )
       }
@@ -436,6 +508,39 @@ function App() {
     }
 
     await sendStop(item)
+  }
+
+  const loginAdmin = async () => {
+    if (!passwordInput.trim()) {
+      setError('Enter admin password.')
+      return
+    }
+
+    try {
+      const response = await fetch(apiUrl('/auth/login'), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ password: passwordInput }),
+      })
+      const payload = (await response.json()) as { token?: string; error?: string; authRequired?: boolean }
+      if (!response.ok) {
+        setError(payload.error ?? 'Login failed')
+        return
+      }
+
+      const token = payload.token?.trim() ?? ''
+      setAuthRequired(Boolean(payload.authRequired))
+      setAdminToken(token)
+      if (token) {
+        window.localStorage.setItem(ADMIN_TOKEN_STORAGE_KEY, token)
+      } else {
+        window.localStorage.removeItem(ADMIN_TOKEN_STORAGE_KEY)
+      }
+      setPasswordInput('')
+      setError(null)
+    } catch {
+      setError('Cannot reach backend for login.')
+    }
   }
 
   const statusChip = session?.status === 'running' ? 'RUNNING' : session?.status === 'finished' ? 'FINISHED' : 'IDLE'
@@ -487,7 +592,24 @@ function App() {
                 {session ? `Team: ${session.team}` : 'Waiting for session...'}
               </Typography>
 
-              {role === 'admin' && (
+              {role === 'admin' && authRequired && !adminToken && (
+                <Stack spacing={2} sx={{ width: '100%', maxWidth: 460 }}>
+                  <Typography variant="h6">Admin Login</Typography>
+                  <TextField
+                    value={passwordInput}
+                    onChange={(event) => setPasswordInput(event.target.value)}
+                    label="Password"
+                    type="password"
+                    fullWidth
+                    autoComplete="current-password"
+                  />
+                  <Button variant="contained" size="large" onClick={loginAdmin}>
+                    Login
+                  </Button>
+                </Stack>
+              )}
+
+              {role === 'admin' && (!authRequired || !!adminToken) && (
                 <Stack spacing={2} sx={{ width: '100%', maxWidth: 460 }}>
                   <TextField
                     value={teamInput}
@@ -505,6 +627,38 @@ function App() {
                     </Button>
                   </Stack>
                 </Stack>
+              )}
+
+              {role === 'judge' && (
+                <TableContainer component={Paper} variant="outlined" sx={{ width: '100%', maxWidth: 760 }}>
+                  <Table size="small">
+                    <TableHead>
+                      <TableRow>
+                        <TableCell>#</TableCell>
+                        <TableCell>Team</TableCell>
+                        <TableCell align="right">Time</TableCell>
+                      </TableRow>
+                    </TableHead>
+                    <TableBody>
+                      {results.length === 0 && (
+                        <TableRow>
+                          <TableCell colSpan={3} align="center">
+                            No finished teams yet
+                          </TableCell>
+                        </TableRow>
+                      )}
+                      {results.map((result, index) => (
+                        <TableRow key={`${result.team}-${result.startTime}-${index}`}>
+                          <TableCell>{index + 1}</TableCell>
+                          <TableCell>{result.team}</TableCell>
+                          <TableCell align="right" sx={{ fontFamily: '"Roboto Mono", monospace' }}>
+                            {formatTime(result.elapsedMs)}
+                          </TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                </TableContainer>
               )}
 
               {error && (

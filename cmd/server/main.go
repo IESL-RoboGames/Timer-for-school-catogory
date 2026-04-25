@@ -26,8 +26,9 @@ func main() {
 	mongoURI := envOrDefault("MONGODB_URI", "mongodb://localhost:27017")
 	dbName := envOrDefault("DB_NAME", "robogames")
 	port := envOrDefault("PORT", "8080")
-	adminKey := strings.TrimSpace(os.Getenv("ADMIN_KEY"))
 	enableAdminAuth := isTrue(os.Getenv("ENABLE_ADMIN_AUTH"))
+	adminToken := envOrDefault("ADMIN_TOKEN", "dev-admin-token")
+	adminPasswordHash := envOrDefault("ADMIN_PASSWORD_HASH", defaultAdminPasswordHash)
 
 	// 1. Database Setup
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -51,13 +52,13 @@ func main() {
 	go hub.Run()
 
 	// 3. Handlers Setup
-	h := handlers.NewHandler(db, hub, adminKey, enableAdminAuth)
+	h := handlers.NewHandler(db, hub, adminToken, adminPasswordHash, enableAdminAuth)
 	if err := h.RecoverStateFromEvents(); err != nil {
 		log.Printf("state recovery warning: %v", err)
 	}
 
 	hub.OnStop = func(signal websocket.StopSignal) {
-		if enableAdminAuth && adminKey != "" && signal.AdminKey != adminKey {
+		if enableAdminAuth && adminToken != "" && signal.AdminKey != adminToken {
 			log.Printf("blocked websocket STOP from source=%s due to invalid admin key", signal.Source)
 			return
 		}
@@ -70,9 +71,11 @@ func main() {
 	r.SetTrustedProxies(nil)
 
 	// API Routes
+	r.POST("/auth/login", h.AdminLogin)
 	r.POST("/start", h.StartTimer)
 	r.POST("/stop", h.StopTimer)
 	r.GET("/state", h.GetState)
+	r.GET("/results", h.GetResults)
 	r.GET("/ws", h.ServeWs)
 
 	// Serve React build output for Admin/Judge/Public routes.
@@ -97,6 +100,9 @@ func main() {
 		log.Fatal(err)
 	}
 }
+
+// Default password is "admin123". Override in .env with ADMIN_PASSWORD_HASH.
+const defaultAdminPasswordHash = "$2a$10$.f8H.xrtQ8GLzb7L55DIWu0kjhneGUeQ4YyMzGYK9jVrUgzjlXh1u"
 
 func serveWebIndex(c *gin.Context) {
 	c.File(filepath.Clean("./web/dist/index.html"))

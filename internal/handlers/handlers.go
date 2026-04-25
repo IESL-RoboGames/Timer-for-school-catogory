@@ -15,28 +15,31 @@ import (
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/mongo/options"
+	"golang.org/x/crypto/bcrypt"
 )
 
 const mongoOpTimeout = 5 * time.Second
 
 type Handler struct {
-	db          *mongo.Database
-	hub         *websocket.Hub
-	adminKey    string
-	requireAuth bool
+	db           *mongo.Database
+	hub          *websocket.Hub
+	adminToken   string
+	passwordHash string
+	requireAuth  bool
 }
 
-func NewHandler(db *mongo.Database, hub *websocket.Hub, adminKey string, requireAuth bool) *Handler {
+func NewHandler(db *mongo.Database, hub *websocket.Hub, adminToken, passwordHash string, requireAuth bool) *Handler {
 	return &Handler{
-		db:          db,
-		hub:         hub,
-		adminKey:    strings.TrimSpace(adminKey),
-		requireAuth: requireAuth,
+		db:           db,
+		hub:          hub,
+		adminToken:   strings.TrimSpace(adminToken),
+		passwordHash: strings.TrimSpace(passwordHash),
+		requireAuth:  requireAuth,
 	}
 }
 
 func (h *Handler) authorizeAdmin(c *gin.Context) bool {
-	if !h.requireAuth || h.adminKey == "" {
+	if !h.requireAuth || h.adminToken == "" {
 		return true
 	}
 
@@ -46,12 +49,45 @@ func (h *Handler) authorizeAdmin(c *gin.Context) bool {
 		provided = strings.TrimPrefix(authHeader, "Bearer ")
 	}
 
-	if provided != h.adminKey {
+	if provided != h.adminToken {
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
 		return false
 	}
 
 	return true
+}
+
+func (h *Handler) AdminLogin(c *gin.Context) {
+	if !h.requireAuth {
+		c.JSON(http.StatusOK, gin.H{
+			"token":        "",
+			"authRequired": false,
+		})
+		return
+	}
+
+	var req struct {
+		Password string `json:"password"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	if strings.TrimSpace(req.Password) == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "password is required"})
+		return
+	}
+
+	if err := bcrypt.CompareHashAndPassword([]byte(h.passwordHash), []byte(req.Password)); err != nil {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid password"})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"token":        h.adminToken,
+		"authRequired": true,
+	})
 }
 
 func (h *Handler) StartTimer(c *gin.Context) {
@@ -286,24 +322,70 @@ func (h *Handler) GetState(c *gin.Context) {
 	if err != nil {
 		if errors.Is(err, mongo.ErrNoDocuments) {
 			c.JSON(http.StatusOK, gin.H{
-				"serverTime": serverTime,
-				"session":    nil,
+				"serverTime":   serverTime,
+				"session":      nil,
+				"authRequired": h.requireAuth,
 			})
 			return
 		}
 
 		c.JSON(http.StatusInternalServerError, gin.H{
-			"error":      err.Error(),
-			"serverTime": serverTime,
-			"session":    nil,
+			"error":        err.Error(),
+			"serverTime":   serverTime,
+			"session":      nil,
+			"authRequired": h.requireAuth,
 		})
 		return
 	}
 
 	c.JSON(http.StatusOK, gin.H{
-		"serverTime": serverTime,
-		"session":    session,
+		"serverTime":   serverTime,
+		"session":      session,
+		"authRequired": h.requireAuth,
 	})
+}
+
+func (h *Handler) GetResults(c *gin.Context) {
+	dbCtx, cancel := context.WithTimeout(context.Background(), mongoOpTimeout)
+	defer cancel()
+
+	filter := bson.M{"status": "finished"}
+	opts := options.Find().SetSort(bson.D{{Key: "startTime", Value: 1}})
+
+	cursor, err := h.db.Collection("sessions").Find(dbCtx, filter, opts)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	defer cursor.Close(dbCtx)
+
+	results := make([]gin.H, 0)
+	for cursor.Next(dbCtx) {
+		var session models.Session
+		if err := cursor.Decode(&session); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+
+		elapsed := session.EndTime - session.StartTime
+		if elapsed < 0 {
+			elapsed = 0
+		}
+
+		results = append(results, gin.H{
+			"team":      session.Team,
+			"startTime": session.StartTime,
+			"endTime":   session.EndTime,
+			"elapsedMs": elapsed,
+		})
+	}
+
+	if err := cursor.Err(); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"results": results})
 }
 
 func (h *Handler) ServeWs(c *gin.Context) {
