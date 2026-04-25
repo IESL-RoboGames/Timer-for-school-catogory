@@ -28,6 +28,9 @@ type Session = {
   startTime: number
   endTime?: number
   status: SessionStatus
+  chargeStartTime?: number
+  chargeEndTime?: number
+  chargeStatus?: 'running' | 'finished'
 }
 
 type StateResponse = {
@@ -67,6 +70,16 @@ type WsEvent =
       team: string
       endTime: number
       requestId?: string
+    }
+  | {
+      event: 'CHARGE_START'
+      team: string
+      chargeStartTime: number
+    }
+  | {
+      event: 'CHARGE_STOP'
+      team: string
+      chargeEndTime: number
     }
 
 const API_BASE = (import.meta.env.VITE_API_BASE as string | undefined)?.replace(/\/$/, '') ?? ''
@@ -195,6 +208,7 @@ function App() {
   const [teamInput, setTeamInput] = useState('')
   const [session, setSession] = useState<Session | null>(null)
   const [elapsedMs, setElapsedMs] = useState(0)
+  const [chargingElapsedMs, setChargingElapsedMs] = useState(0)
   const [serverOffset, setServerOffset] = useState(0)
   const [error, setError] = useState<string | null>(null)
   const [wsConnected, setWsConnected] = useState(false)
@@ -275,6 +289,31 @@ function App() {
 
     const update = () => {
       setElapsedMs(Date.now() + serverOffset - session.startTime)
+    }
+
+    update()
+    const timerId = window.setInterval(update, 100)
+    return () => window.clearInterval(timerId)
+  }, [serverOffset, session])
+
+  useEffect(() => {
+    if (!session || !session.chargeStartTime) {
+      setChargingElapsedMs(0)
+      return
+    }
+
+    if (session.chargeStatus === 'finished') {
+      setChargingElapsedMs((session.chargeEndTime ?? session.chargeStartTime) - session.chargeStartTime)
+      return
+    }
+
+    if (session.chargeStatus !== 'running') {
+      setChargingElapsedMs(0)
+      return
+    }
+
+    const update = () => {
+      setChargingElapsedMs(Date.now() + serverOffset - session.chargeStartTime!)
     }
 
     update()
@@ -384,6 +423,32 @@ function App() {
               setPendingCount((prev) => Math.max(0, prev - 1))
             })
           }
+        }
+
+        if (data.event === 'CHARGE_START') {
+          const current = currentSessionRef.current
+          if (!current) {
+            return
+          }
+          setSession({
+            ...current,
+            chargeStartTime: data.chargeStartTime,
+            chargeEndTime: undefined,
+            chargeStatus: 'running',
+          })
+          return
+        }
+
+        if (data.event === 'CHARGE_STOP') {
+          const current = currentSessionRef.current
+          if (!current || !current.chargeStartTime) {
+            return
+          }
+          setSession({
+            ...current,
+            chargeEndTime: data.chargeEndTime,
+            chargeStatus: 'finished',
+          })
         }
       }
 
@@ -543,6 +608,63 @@ function App() {
     }
   }
 
+  const startCharging = async () => {
+    const active = currentSessionRef.current
+    if (!active || active.status !== 'running') {
+      setError('Start main timer first.')
+      return
+    }
+
+    try {
+      const response = await fetch(apiUrl('/charge/start'), {
+        method: 'POST',
+        headers: adminHeaders(adminToken),
+        body: JSON.stringify({ source: 'admin-web' }),
+      })
+
+      const payload = (await response.json()) as Session | { error?: string }
+      if (!response.ok) {
+        setError((payload as { error?: string }).error ?? 'Failed to start charging timer')
+        return
+      }
+
+      setSession(payload as Session)
+      setError(null)
+    } catch {
+      setError('Cannot reach backend when starting charging timer.')
+    }
+  }
+
+  const stopCharging = async () => {
+    const active = currentSessionRef.current
+    if (!active || active.chargeStatus !== 'running') {
+      setError('No running charging timer.')
+      return
+    }
+
+    try {
+      const response = await fetch(apiUrl('/charge/stop'), {
+        method: 'POST',
+        headers: adminHeaders(adminToken),
+        body: JSON.stringify({
+          chargeStopTime: Math.round(Date.now() + serverOffset),
+          source: 'admin-web',
+        }),
+      })
+
+      const payload = (await response.json()) as Session | { error?: string }
+      if (!response.ok) {
+        setError((payload as { error?: string }).error ?? 'Failed to stop charging timer')
+        return
+      }
+
+      setSession(payload as Session)
+      setError(null)
+    } catch {
+      setError('Cannot reach backend when stopping charging timer.')
+    }
+  }
+
   const statusChip = session?.status === 'running' ? 'RUNNING' : session?.status === 'finished' ? 'FINISHED' : 'IDLE'
 
   return (
@@ -592,6 +714,31 @@ function App() {
                 {session ? `Team: ${session.team}` : 'Waiting for session...'}
               </Typography>
 
+              <Paper
+                variant="outlined"
+                sx={{
+                  width: '100%',
+                  maxWidth: 360,
+                  p: 1.5,
+                  textAlign: 'left',
+                  alignSelf: role === 'public' ? 'flex-end' : 'center',
+                }}
+              >
+                <Typography variant="caption" color="text.secondary">
+                  Charging Timer
+                </Typography>
+                <Typography sx={{ fontFamily: '"Roboto Mono", monospace', fontSize: '1.4rem', lineHeight: 1.2 }}>
+                  {formatTime(chargingElapsedMs)}
+                </Typography>
+                <Typography variant="caption" color="text.secondary">
+                  {session?.chargeStatus === 'running'
+                    ? 'RUNNING'
+                    : session?.chargeStatus === 'finished'
+                      ? 'FINISHED'
+                      : 'IDLE'}
+                </Typography>
+              </Paper>
+
               {role === 'admin' && authRequired && !adminToken && (
                 <Stack spacing={2} sx={{ width: '100%', maxWidth: 460 }}>
                   <Typography variant="h6">Admin Login</Typography>
@@ -624,6 +771,25 @@ function App() {
                     </Button>
                     <Button variant="contained" color="error" size="large" onClick={stopTimer} disabled={session?.status !== 'running'}>
                       Stop Timer
+                    </Button>
+                  </Stack>
+                  <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1.5}>
+                    <Button
+                      variant="outlined"
+                      size="large"
+                      onClick={startCharging}
+                      disabled={session?.status !== 'running' || session?.chargeStatus === 'running'}
+                    >
+                      Start Charging
+                    </Button>
+                    <Button
+                      variant="outlined"
+                      color="warning"
+                      size="large"
+                      onClick={stopCharging}
+                      disabled={session?.chargeStatus !== 'running'}
+                    >
+                      Stop Charging
                     </Button>
                   </Stack>
                 </Stack>

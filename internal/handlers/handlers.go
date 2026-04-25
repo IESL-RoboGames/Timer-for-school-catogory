@@ -173,6 +173,119 @@ func (h *Handler) StopTimer(c *gin.Context) {
 	c.JSON(http.StatusOK, session)
 }
 
+func (h *Handler) StartChargingTimer(c *gin.Context) {
+	if !h.authorizeAdmin(c) {
+		return
+	}
+
+	var req struct {
+		Source string `json:"source"`
+	}
+	_ = c.ShouldBindJSON(&req)
+
+	chargeStartTime := time.Now().UnixMilli()
+	filter := bson.M{"status": "running", "chargeStatus": bson.M{"$ne": "running"}}
+	update := bson.M{
+		"$set": bson.M{
+			"chargeStartTime": chargeStartTime,
+			"chargeStatus":    "running",
+		},
+		"$unset": bson.M{
+			"chargeEndTime": "",
+		},
+	}
+
+	dbCtx, cancel := context.WithTimeout(context.Background(), mongoOpTimeout)
+	defer cancel()
+
+	opts := options.FindOneAndUpdate().SetReturnDocument(options.After).SetSort(bson.M{"_id": -1})
+	var updatedSession models.Session
+	err := h.db.Collection("sessions").FindOneAndUpdate(dbCtx, filter, update, opts).Decode(&updatedSession)
+	if err != nil {
+		if errors.Is(err, mongo.ErrNoDocuments) {
+			c.JSON(http.StatusNotFound, gin.H{"error": "no running session available for charging timer"})
+			return
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	event := models.Event{
+		Type:       "CHARGE_START",
+		Team:       updatedSession.Team,
+		Time:       chargeStartTime,
+		Source:     fallbackSource(req.Source, "admin-http"),
+		RecordedAt: time.Now().UnixMilli(),
+	}
+	_, _ = h.db.Collection("events").InsertOne(dbCtx, event)
+
+	h.hub.Broadcast(gin.H{
+		"event":           "CHARGE_START",
+		"team":            updatedSession.Team,
+		"chargeStartTime": chargeStartTime,
+	})
+
+	c.JSON(http.StatusOK, updatedSession)
+}
+
+func (h *Handler) StopChargingTimer(c *gin.Context) {
+	if !h.authorizeAdmin(c) {
+		return
+	}
+
+	var req struct {
+		ChargeStopTime float64 `json:"chargeStopTime"`
+		Source         string  `json:"source"`
+	}
+	_ = c.ShouldBindJSON(&req)
+
+	chargeStopTime := int64(math.Round(req.ChargeStopTime))
+	serverNow := time.Now().UnixMilli()
+	if chargeStopTime == 0 || chargeStopTime > serverNow {
+		chargeStopTime = serverNow
+	}
+
+	filter := bson.M{"status": "running", "chargeStatus": "running"}
+	update := bson.M{
+		"$set": bson.M{
+			"chargeEndTime": chargeStopTime,
+			"chargeStatus":  "finished",
+		},
+	}
+
+	dbCtx, cancel := context.WithTimeout(context.Background(), mongoOpTimeout)
+	defer cancel()
+
+	opts := options.FindOneAndUpdate().SetReturnDocument(options.After).SetSort(bson.M{"_id": -1})
+	var updatedSession models.Session
+	err := h.db.Collection("sessions").FindOneAndUpdate(dbCtx, filter, update, opts).Decode(&updatedSession)
+	if err != nil {
+		if errors.Is(err, mongo.ErrNoDocuments) {
+			c.JSON(http.StatusNotFound, gin.H{"error": "no running charging timer found"})
+			return
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	event := models.Event{
+		Type:       "CHARGE_STOP",
+		Team:       updatedSession.Team,
+		Time:       chargeStopTime,
+		Source:     fallbackSource(req.Source, "admin-http"),
+		RecordedAt: time.Now().UnixMilli(),
+	}
+	_, _ = h.db.Collection("events").InsertOne(dbCtx, event)
+
+	h.hub.Broadcast(gin.H{
+		"event":         "CHARGE_STOP",
+		"team":          updatedSession.Team,
+		"chargeEndTime": chargeStopTime,
+	})
+
+	c.JSON(http.StatusOK, updatedSession)
+}
+
 func (h *Handler) ProcessStop(stopTime int64, requestID, source string) (*models.Session, error) {
 	requestID = strings.TrimSpace(requestID)
 	source = fallbackSource(source, "unknown")
@@ -221,6 +334,19 @@ func (h *Handler) ProcessStop(stopTime int64, requestID, source string) (*models
 		return nil, err
 	}
 
+	if updatedSession.ChargeStatus == "running" {
+		autoStopCtx, autoStopCancel := context.WithTimeout(context.Background(), mongoOpTimeout)
+		defer autoStopCancel()
+		_, _ = h.db.Collection("sessions").UpdateByID(autoStopCtx, updatedSession.ID, bson.M{
+			"$set": bson.M{
+				"chargeEndTime": stopTime,
+				"chargeStatus":  "finished",
+			},
+		})
+		updatedSession.ChargeEndTime = stopTime
+		updatedSession.ChargeStatus = "finished"
+	}
+
 	// Log event
 	event := models.Event{
 		Type:       "STOP",
@@ -242,6 +368,14 @@ func (h *Handler) ProcessStop(stopTime int64, requestID, source string) (*models
 		"requestId": requestID,
 		"source":    source,
 	})
+
+	if updatedSession.ChargeEndTime > 0 {
+		h.hub.Broadcast(gin.H{
+			"event":         "CHARGE_STOP",
+			"team":          updatedSession.Team,
+			"chargeEndTime": updatedSession.ChargeEndTime,
+		})
+	}
 
 	return &updatedSession, nil
 }

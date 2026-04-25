@@ -5,11 +5,14 @@ import (
 )
 
 type Session struct {
-	ID        primitive.ObjectID `bson:"_id,omitempty" json:"id"`
-	Team      string             `bson:"team" json:"team"`
-	StartTime int64              `bson:"startTime" json:"startTime"` // Unix milli
-	EndTime   int64              `bson:"endTime,omitempty" json:"endTime"`
-	Status    string             `bson:"status" json:"status"` // "running", "finished"
+	ID              primitive.ObjectID `bson:"_id,omitempty" json:"id"`
+	Team            string             `bson:"team" json:"team"`
+	StartTime       int64              `bson:"startTime" json:"startTime"` // Unix milli
+	EndTime         int64              `bson:"endTime,omitempty" json:"endTime"`
+	Status          string             `bson:"status" json:"status"` // "running", "finished"
+	ChargeStartTime int64              `bson:"chargeStartTime,omitempty" json:"chargeStartTime,omitempty"`
+	ChargeEndTime   int64              `bson:"chargeEndTime,omitempty" json:"chargeEndTime,omitempty"`
+	ChargeStatus    string             `bson:"chargeStatus,omitempty" json:"chargeStatus,omitempty"` // "running", "finished"
 }
 
 type Event struct {

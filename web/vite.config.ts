@@ -5,6 +5,8 @@ import react from '@vitejs/plugin-react'
 export default defineConfig({
   plugins: [react()],
   server: {
+    host: '0.0.0.0',
+    port: 5173,
     proxy: {
       '/auth/login': {
         target: 'http://localhost:8080',
@@ -13,6 +15,12 @@ export default defineConfig({
         target: 'http://localhost:8080',
       },
       '/stop': {
+        target: 'http://localhost:8080',
+      },
+      '/charge/start': {
+        target: 'http://localhost:8080',
+      },
+      '/charge/stop': {
         target: 'http://localhost:8080',
       },
       '/state': {

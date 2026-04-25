@@ -47,6 +47,11 @@ Default password for the default hash is `admin123` (change this in production).
 - `http://localhost:5173/judge`
 - `http://localhost:5173/public`
 
+LAN access from other devices on same network:
+- `http://<YOUR_MACHINE_IP>:5173/admin`
+- `http://<YOUR_MACHINE_IP>:5173/judge`
+- `http://<YOUR_MACHINE_IP>:5173/public`
+
 Vite proxies `/start`, `/stop`, `/state`, and `/ws` to backend `:8080`.
 
 ## Local Single-Command Run (Go serves built React)
@@ -57,6 +62,11 @@ Then open:
 - `http://localhost:8080/admin`
 - `http://localhost:8080/judge`
 - `http://localhost:8080/public`
+
+LAN access (single-command mode):
+- `http://<YOUR_MACHINE_IP>:8080/admin`
+- `http://<YOUR_MACHINE_IP>:8080/judge`
+- `http://<YOUR_MACHINE_IP>:8080/public`
 
 ## Docker
 ```bash
