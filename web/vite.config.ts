@@ -11,6 +11,9 @@ export default defineConfig({
       '/auth/login': {
         target: 'http://localhost:8080',
       },
+      '/select': {
+        target: 'http://localhost:8080',
+      },
       '/start': {
         target: 'http://localhost:8080',
       },

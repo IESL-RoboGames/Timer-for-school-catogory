@@ -8,9 +8,14 @@ interface JudgePageProps {
   results: ResultEntry[]
   elapsedMs: number
   chargingMs: number
+  selectedTeam: string
+  selectedRound: number
 }
 
-export function JudgePage({ session, results, elapsedMs, chargingMs }: JudgePageProps) {
+export function JudgePage({ session, results, elapsedMs, chargingMs, selectedTeam, selectedRound }: JudgePageProps) {
+  const displayTeam = session?.team || selectedTeam
+  const displayRound = session?.round || selectedRound
+
   return (
     <Box sx={{ minHeight: '100dvh', bgcolor: 'background.default', width: '100%', overflowX: 'hidden' }}>
       <Container maxWidth="md" sx={{ py: 2 }}>
@@ -26,14 +31,14 @@ export function JudgePage({ session, results, elapsedMs, chargingMs }: JudgePage
             </Box>
           </Stack>
           
-          {session && (
+          {displayTeam && (
             <Typography variant="h4" color="primary" sx={{ 
               fontWeight: 900, 
               textAlign: 'center',
               textTransform: 'uppercase',
               mb: 1
             }}>
-              {session.team} <Box component="span" sx={{ ml: 2, color: 'text.secondary', fontSize: '0.8em' }}>RD {session.round}</Box>
+              {displayTeam} <Box component="span" sx={{ ml: 1, color: 'text.secondary', fontSize: '0.8em' }}>RD {displayRound}</Box>
             </Typography>
           )}
 

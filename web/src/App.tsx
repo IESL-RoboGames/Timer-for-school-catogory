@@ -98,22 +98,38 @@ export default function App() {
     } catch { }
   }, [post, fetchResults])
 
+  const handleContinue = useCallback(async () => {
+    if (!selectedTeam) return
+    try {
+      await post('/select', { team: selectedTeam, round: selectedRound })
+      setControlView(true)
+    } catch { setError('Selection failed') }
+  }, [selectedTeam, selectedRound, post])
+
   const sync = useCallback(async () => {
     try {
       const start = Date.now(); const res: StateResponse = await get('/state')
       setServerOffset(res.serverTime - (start + Date.now()) / 2)
-      setSession(res.session); if (res.session) setControlView(true)
+      setSession(res.session); if (res.session) {
+        setControlView(true); setSelectedTeam(res.session.team); setSelectedRound(res.session.round)
+      }
     } catch { if (token) setToken('') }
   }, [get, token])
 
   const onWsMessage = useCallback((data: WsEvent) => {
-    if (data.event === 'START') { setSession({ team: data.team, round: data.round, startTime: data.startTime, status: 'running' }); fetchResults() }
+    if (data.event === 'SELECT') {
+      if (role !== 'admin') { setSelectedTeam(data.team); setSelectedRound(data.round) }
+    } else if (data.event === 'START') { 
+      setSession({ team: data.team, round: data.round, startTime: data.startTime, status: 'running' })
+      setSelectedTeam(data.team); setSelectedRound(data.round)
+      void fetchResults() 
+    }
     else if (data.event === 'STOP') { setSession(prev => prev ? { ...prev, status: 'paused', endTime: data.endTime } : null); fetchResults() }
     else if (data.event === 'RESET') { setSession(null); fetchResults() }
     else if (data.event === 'RESULTS_UPDATED') fetchResults()
     else if (data.event === 'CHARGE_START') setSession(prev => prev ? { ...prev, chargeStartTime: data.chargeStartTime, chargeStatus: 'running' } : null)
     else if (data.event === 'CHARGE_STOP') setSession(prev => prev ? { ...prev, chargeEndTime: data.chargeEndTime, chargeStatus: 'finished' } : null)
-  }, [fetchResults])
+  }, [role, fetchResults])
 
   useWebSocket(WS_URL, onWsMessage)
   useEffect(() => { if (token) { sync(); fetchResults() } }, [token, sync, fetchResults])
@@ -150,7 +166,7 @@ export default function App() {
 
   if (!token) return <ThemeProvider theme={buildTheme(role)}><CssBaseline /><AuthGate onLogin={handleLogin} error={error} /></ThemeProvider>
 
-  const commonProps = { session, results, elapsedMs, chargingMs }
+  const commonProps = { session, results, elapsedMs, chargingMs, selectedTeam, selectedRound }
   return (
     <ThemeProvider theme={buildTheme(role)}>
       <CssBaseline />
@@ -162,8 +178,8 @@ export default function App() {
       {role === 'public' ? <PublicPage {...commonProps} /> :
        role === 'judge' ? <JudgePage {...commonProps} /> :
        <AdminPage {...commonProps} 
-         selectedTeam={selectedTeam} selectedRound={selectedRound} isAdminControlView={controlView}
-         onTeamChange={setSelectedTeam} onRoundChange={setSelectedRound} onContinue={() => setControlView(true)} onBack={() => setControlView(false)}
+         isAdminControlView={controlView}
+         onTeamChange={setSelectedTeam} onRoundChange={setSelectedRound} onContinue={handleContinue} onBack={() => setControlView(false)}
          onStart={startTimer}
          onStop={stopTimer}
          onChargeStart={startCharging}

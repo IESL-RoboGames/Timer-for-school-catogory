@@ -36,6 +36,11 @@ export type ResultsResponse = {
 
 export type WsEvent =
   | {
+      event: 'SELECT'
+      team: string
+      round: number
+    }
+  | {
       event: 'START'
       team: string
       round: number

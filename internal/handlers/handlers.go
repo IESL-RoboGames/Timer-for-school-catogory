@@ -67,6 +67,24 @@ func (h *Handler) AdminLogin(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"token": h.adminToken, "authRequired": true})
 }
 
+func (h *Handler) SelectTeam(c *gin.Context) {
+	if !h.authorizeAdmin(c) { return }
+	var req struct {
+		Team  string `json:"team"`
+		Round int    `json:"round"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	h.hub.Broadcast(gin.H{
+		"event": "SELECT",
+		"team":  req.Team,
+		"round": req.Round,
+	})
+	c.JSON(http.StatusOK, gin.H{"status": "ok"})
+}
+
 func (h *Handler) StartTimer(c *gin.Context) {
 	if !h.authorizeAdmin(c) { return }
 	var req struct { 

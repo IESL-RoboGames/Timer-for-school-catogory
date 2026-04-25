@@ -72,6 +72,7 @@ func main() {
 
 	// API Routes
 	r.POST("/auth/login", h.AdminLogin)
+	r.POST("/select", h.SelectTeam)
 	r.POST("/start", h.StartTimer)
 	r.POST("/stop", h.StopTimer)
 	r.POST("/resume", h.ResumeTimer)
