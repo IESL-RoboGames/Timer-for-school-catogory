@@ -4,8 +4,6 @@ import {
   CssBaseline,
   Box,
   Alert,
-  IconButton,
-  Chip,
 } from '@mui/material'
 import type { Session, ResultEntry, WsEvent, StateResponse, ResultsResponse } from './types'
 import { buildTheme } from './theme/theme'

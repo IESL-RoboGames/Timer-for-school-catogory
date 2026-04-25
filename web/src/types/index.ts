@@ -1,4 +1,4 @@
-export type SessionStatus = 'running' | 'finished' | 'cancelled' | 'hidden'
+export type SessionStatus = 'running' | 'paused' | 'finished' | 'cancelled' | 'hidden'
 
 export type Session = {
   id?: string

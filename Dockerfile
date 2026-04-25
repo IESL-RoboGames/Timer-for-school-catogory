@@ -1,24 +1,32 @@
-# Web build stage
-FROM node:22-alpine AS web-builder
-WORKDIR /web
+# Stage 1: Build the React Frontend
+FROM node:20-alpine AS frontend-builder
+WORKDIR /app/web
 COPY web/package*.json ./
-RUN npm ci
-COPY web .
+RUN npm install
+COPY web/ ./
 RUN npm run build
 
-# Go build stage
-FROM golang:1.24-alpine AS go-builder
+# Stage 2: Build the Go Backend
+FROM golang:1.23-alpine AS backend-builder
 WORKDIR /app
 COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
-RUN go build -o main ./cmd/server/main.go
+RUN go build -o server ./cmd/server/main.go
 
-# Run stage
+# Stage 3: Final Production Image
 FROM alpine:latest
 WORKDIR /app
-COPY --from=go-builder /app/main .
-COPY --from=go-builder /app/.env .
-COPY --from=web-builder /web/dist ./web/dist
+
+# Install runtime dependencies
+RUN apk add --no-cache ca-certificates tzdata
+
+# Copy built artifacts from previous stages
+COPY --from=backend-builder /app/server .
+COPY --from=frontend-builder /app/web/dist ./web/dist
+
+# Expose port
 EXPOSE 8080
-CMD ["./main"]
+
+# Run the server
+CMD ["./server"]

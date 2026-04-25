@@ -1,4 +1,4 @@
-import { Stack, Typography, Paper, Container, IconButton, Box } from '@mui/material'
+import { Stack, Typography, Container, IconButton, Box } from '@mui/material'
 import { ArrowBack as ArrowBackIcon } from '@mui/icons-material'
 import type { Session, ResultEntry } from '../types'
 import { TimerDisplay } from '../components/common/TimerDisplay'

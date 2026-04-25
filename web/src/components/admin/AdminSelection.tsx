@@ -7,7 +7,6 @@ interface AdminSelectionProps {
   onTeamChange: (team: string) => void
   onRoundChange: (round: number) => void
   onContinue: () => void
-  onReset: () => void
 }
 
 export function AdminSelection({
@@ -15,8 +14,7 @@ export function AdminSelection({
   selectedRound,
   onTeamChange,
   onRoundChange,
-  onContinue,
-  onReset
+  onContinue
 }: AdminSelectionProps) {
   return (
     <Stack spacing={3} sx={{ width: '100%', maxWidth: 400 }}>
