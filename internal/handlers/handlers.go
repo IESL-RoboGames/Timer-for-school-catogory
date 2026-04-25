@@ -546,6 +546,9 @@ func (h *Handler) ResetTimer(c *gin.Context) {
 }
 
 func (h *Handler) GetState(c *gin.Context) {
+	if !h.authorizeAdmin(c) {
+		return
+	}
 	_ = h.RecoverStateFromEvents()
 
 	serverTime := time.Now().UnixMilli()
@@ -581,6 +584,9 @@ func (h *Handler) GetState(c *gin.Context) {
 }
 
 func (h *Handler) GetResults(c *gin.Context) {
+	if !h.authorizeAdmin(c) {
+		return
+	}
 	dbCtx, cancel := context.WithTimeout(context.Background(), mongoOpTimeout)
 	defer cancel()
 
