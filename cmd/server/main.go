@@ -3,6 +3,10 @@ package main
 import (
 	"context"
 	"log"
+	"net/http"
+	"os"
+	"path/filepath"
+	"strings"
 	"time"
 
 	"robogames-timer/internal/handlers"
@@ -10,20 +14,35 @@ import (
 
 	"github.com/gin-contrib/cors"
 	"github.com/gin-gonic/gin"
+	"github.com/joho/godotenv"
 	"go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/mongo/options"
 )
 
 func main() {
+	// Prefer local .env values during development, even if shell vars exist.
+	_ = godotenv.Overload()
+
+	mongoURI := envOrDefault("MONGODB_URI", "mongodb://localhost:27017")
+	dbName := envOrDefault("DB_NAME", "robogames")
+	port := envOrDefault("PORT", "8080")
+
 	// 1. Database Setup
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	client, err := mongo.Connect(ctx, options.Client().ApplyURI("mongodb://localhost:27017"))
+	client, err := mongo.Connect(ctx, options.Client().ApplyURI(mongoURI).SetServerSelectionTimeout(5*time.Second))
 	if err != nil {
 		log.Fatal(err)
 	}
-	db := client.Database("robogames")
+
+	pingCtx, pingCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer pingCancel()
+	if err := client.Ping(pingCtx, nil); err != nil {
+		log.Fatalf("mongodb ping failed (%s): %v", mongoURI, err)
+	}
+
+	db := client.Database(dbName)
 
 	// 2. WebSocket Hub Setup
 	hub := websocket.NewHub()
@@ -32,17 +51,13 @@ func main() {
 	// 3. Handlers Setup
 	h := handlers.NewHandler(db, hub)
 	hub.OnStop = func(stopTime int64) {
-		h.ProcessStop(stopTime)
+		_, _ = h.ProcessStop(stopTime)
 	}
 
 	// 4. Router Setup
 	r := gin.Default()
 	r.Use(cors.Default())
-
-	// Static files (for Admin, Judge, Public screens)
-	r.Static("/admin", "./static/admin")
-	r.Static("/judge", "./static/judge")
-	r.Static("/public", "./static/public")
+	r.SetTrustedProxies(nil)
 
 	// API Routes
 	r.POST("/start", h.StartTimer)
@@ -50,9 +65,45 @@ func main() {
 	r.GET("/state", h.GetState)
 	r.GET("/ws", h.ServeWs)
 
+	// Serve React build output for Admin/Judge/Public routes.
+	if distExists("./web/dist") {
+		r.Static("/assets", "./web/dist/assets")
+		r.StaticFile("/favicon.svg", "./web/dist/favicon.svg")
+		r.StaticFile("/icons.svg", "./web/dist/icons.svg")
+
+		r.GET("/", func(c *gin.Context) {
+			c.Redirect(http.StatusTemporaryRedirect, "/admin")
+		})
+
+		for _, route := range []string{"/admin", "/admin/", "/judge", "/judge/", "/public", "/public/"} {
+			r.GET(route, serveWebIndex)
+		}
+	}
+
 	// Start Server
-	log.Println("Server starting on :8080...")
-	if err := r.Run(":8080"); err != nil {
+	bindAddr := ":" + strings.TrimPrefix(port, ":")
+	log.Printf("Server starting on %s...", bindAddr)
+	if err := r.Run(bindAddr); err != nil {
 		log.Fatal(err)
 	}
+}
+
+func serveWebIndex(c *gin.Context) {
+	c.File(filepath.Clean("./web/dist/index.html"))
+}
+
+func distExists(path string) bool {
+	stat, err := os.Stat(path)
+	if err != nil {
+		return false
+	}
+	return stat.IsDir()
+}
+
+func envOrDefault(key, fallback string) string {
+	value := strings.TrimSpace(os.Getenv(key))
+	if value == "" {
+		return fallback
+	}
+	return value
 }

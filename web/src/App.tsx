@@ -1,121 +1,404 @@
-import { useState } from 'react'
-import reactLogo from './assets/react.svg'
-import viteLogo from './assets/vite.svg'
-import heroImg from './assets/hero.png'
-import './App.css'
+import { useEffect, useMemo, useRef, useState } from 'react'
+import {
+  Alert,
+  Box,
+  Button,
+  Chip,
+  Container,
+  CssBaseline,
+  Paper,
+  Stack,
+  TextField,
+  ThemeProvider,
+  Typography,
+  createTheme,
+} from '@mui/material'
+
+type SessionStatus = 'running' | 'finished'
+
+type Session = {
+  id?: string
+  team: string
+  startTime: number
+  endTime?: number
+  status: SessionStatus
+}
+
+type StateResponse = {
+  serverTime: number
+  session: Session | null
+  error?: string
+}
+
+type WsEvent =
+  | {
+      event: 'START'
+      team: string
+      startTime: number
+    }
+  | {
+      event: 'STOP'
+      team: string
+      endTime: number
+    }
+
+const API_BASE = (import.meta.env.VITE_API_BASE as string | undefined)?.replace(/\/$/, '') ?? ''
+const WS_BASE = (import.meta.env.VITE_WS_BASE as string | undefined)?.replace(/\/$/, '')
+
+function apiUrl(path: string): string {
+  return `${API_BASE}${path}`
+}
+
+function wsUrl(path: string): string {
+  if (WS_BASE) {
+    return `${WS_BASE}${path}`
+  }
+
+  if (API_BASE) {
+    const wsBase = API_BASE.replace(/^http/, 'ws')
+    return `${wsBase}${path}`
+  }
+
+  const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
+  return `${protocol}//${window.location.host}${path}`
+}
+
+function formatTime(ms: number): string {
+  const safe = Math.max(0, ms)
+  const totalSeconds = Math.floor(safe / 1000)
+  const minutes = Math.floor(totalSeconds / 60)
+  const seconds = totalSeconds % 60
+  const deciseconds = Math.floor((safe % 1000) / 100)
+  return `${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}.${deciseconds}`
+}
+
+function currentRole(): 'admin' | 'judge' | 'public' {
+  const path = window.location.pathname
+  if (path.startsWith('/judge')) return 'judge'
+  if (path.startsWith('/public')) return 'public'
+  return 'admin'
+}
+
+function buildTheme(role: 'admin' | 'judge' | 'public') {
+  const palette =
+    role === 'public'
+      ? { mode: 'dark' as const, primary: { main: '#2ec4b6' }, background: { default: '#06131f', paper: '#0a1c2f' } }
+      : role === 'judge'
+        ? { mode: 'light' as const, primary: { main: '#0b6e4f' }, background: { default: '#f3f8f5', paper: '#ffffff' } }
+        : { mode: 'light' as const, primary: { main: '#0f4c81' }, background: { default: '#eef3f9', paper: '#ffffff' } }
+
+  return createTheme({
+    typography: {
+      fontFamily: '"DM Sans", "Segoe UI", sans-serif',
+      h1: { fontWeight: 700 },
+    },
+    palette,
+  })
+}
 
 function App() {
-  const [count, setCount] = useState(0)
+  const role = useMemo(() => currentRole(), [])
+  const theme = useMemo(() => buildTheme(role), [role])
+
+  const [teamInput, setTeamInput] = useState('')
+  const [session, setSession] = useState<Session | null>(null)
+  const [elapsedMs, setElapsedMs] = useState(0)
+  const [serverOffset, setServerOffset] = useState(0)
+  const [error, setError] = useState<string | null>(null)
+  const [wsConnected, setWsConnected] = useState(false)
+
+  const currentSessionRef = useRef<Session | null>(null)
+  const pendingStopRef = useRef<number | null>(null)
+  const wsRef = useRef<WebSocket | null>(null)
+
+  useEffect(() => {
+    currentSessionRef.current = session
+  }, [session])
+
+  useEffect(() => {
+    const syncTime = async () => {
+      const requestStart = Date.now()
+      try {
+        const response = await fetch(apiUrl('/state'))
+        const data = (await response.json()) as StateResponse
+        const requestEnd = Date.now()
+        const offset = (data.serverTime ?? Date.now()) - (requestStart + requestEnd) / 2
+        setServerOffset(offset)
+
+        if (data.error) {
+          setError(data.error)
+        } else {
+          setError(null)
+        }
+
+        if (data.session) {
+          setSession(data.session)
+        } else {
+          setSession(null)
+        }
+      } catch {
+        setError('Unable to reach backend. Make sure Go server is running.')
+      }
+    }
+
+    void syncTime()
+  }, [])
+
+  useEffect(() => {
+    if (!session) {
+      setElapsedMs(0)
+      return
+    }
+
+    if (session.status === 'finished') {
+      setElapsedMs((session.endTime ?? session.startTime) - session.startTime)
+      return
+    }
+
+    const update = () => {
+      setElapsedMs(Date.now() + serverOffset - session.startTime)
+    }
+
+    update()
+    const timerId = window.setInterval(update, 100)
+    return () => window.clearInterval(timerId)
+  }, [serverOffset, session])
+
+  useEffect(() => {
+    let ws: WebSocket | null = null
+    let reconnectTimer: number | null = null
+    let closedByCleanup = false
+
+    const connect = () => {
+      ws = new WebSocket(wsUrl('/ws'))
+      wsRef.current = ws
+
+      ws.onopen = () => {
+        setWsConnected(true)
+      }
+
+      ws.onmessage = (event) => {
+        const data = JSON.parse(event.data) as WsEvent
+
+        if (data.event === 'START') {
+          const next: Session = {
+            team: data.team,
+            startTime: data.startTime,
+            status: 'running',
+          }
+          setSession(next)
+          setError(null)
+          pendingStopRef.current = null
+          return
+        }
+
+        if (data.event === 'STOP') {
+          const current = currentSessionRef.current
+          if (!current) {
+            return
+          }
+
+          setSession({
+            ...current,
+            status: 'finished',
+            endTime: data.endTime,
+          })
+          setError(null)
+          pendingStopRef.current = null
+        }
+      }
+
+      ws.onerror = () => {
+        setError('WebSocket connection problem detected. Retrying...')
+      }
+
+      ws.onclose = () => {
+        setWsConnected(false)
+        if (!closedByCleanup) {
+          reconnectTimer = window.setTimeout(connect, 2000)
+        }
+      }
+    }
+
+    connect()
+
+    return () => {
+      closedByCleanup = true
+      if (reconnectTimer) {
+        window.clearTimeout(reconnectTimer)
+      }
+      wsRef.current = null
+      ws?.close()
+    }
+  }, [])
+
+  useEffect(() => {
+    if (role !== 'admin') {
+      return
+    }
+
+    const retry = window.setInterval(() => {
+      const pendingStop = pendingStopRef.current
+      if (pendingStop) {
+        void sendStop(pendingStop)
+      }
+    }, 2000)
+
+    return () => window.clearInterval(retry)
+  }, [role])
+
+  const sendStop = async (stopTime: number) => {
+    try {
+      const response = await fetch(apiUrl('/stop'), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ stopTime }),
+      })
+
+      if (!response.ok) {
+        const payload = (await response.json()) as { error?: string }
+        setError(payload.error ?? 'Stop request failed')
+        return
+      }
+
+      const next = (await response.json()) as Session
+      setSession(next)
+      pendingStopRef.current = null
+      setError(null)
+    } catch {
+      setError('Stop request failed, retrying...')
+    }
+  }
+
+  const startTimer = async () => {
+    if (!teamInput.trim()) {
+      setError('Enter a team name first.')
+      return
+    }
+
+    try {
+      const response = await fetch(apiUrl('/start'), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ team: teamInput.trim() }),
+      })
+
+      if (!response.ok) {
+        const payload = (await response.json()) as { error?: string }
+        setError(payload.error ?? 'Failed to start timer')
+        return
+      }
+
+      const next = (await response.json()) as Session
+      setSession(next)
+      setTeamInput('')
+      setError(null)
+    } catch {
+      setError('Cannot reach backend when starting timer.')
+    }
+  }
+
+  const stopTimer = async () => {
+    const active = currentSessionRef.current
+    if (!active || active.status !== 'running') {
+      setError('No running session to stop.')
+      return
+    }
+
+    const stopTime = Math.round(Date.now() + serverOffset)
+    pendingStopRef.current = stopTime
+
+    // Best-effort WS stop signal (hub also accepts HTTP stop + retries).
+    try {
+      const ws = wsRef.current
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ type: 'STOP', stopTime }))
+      }
+    } catch {
+      // Ignore WS send issues; HTTP retry loop handles reliability.
+    }
+
+    await sendStop(stopTime)
+  }
+
+  const statusChip = session?.status === 'running' ? 'RUNNING' : session?.status === 'finished' ? 'FINISHED' : 'IDLE'
 
   return (
-    <>
-      <section id="center">
-        <div className="hero">
-          <img src={heroImg} className="base" width="170" height="179" alt="" />
-          <img src={reactLogo} className="framework" alt="React logo" />
-          <img src={viteLogo} className="vite" alt="Vite logo" />
-        </div>
-        <div>
-          <h1>Get started</h1>
-          <p>
-            Edit <code>src/App.tsx</code> and save to test <code>HMR</code>
-          </p>
-        </div>
-        <button
-          type="button"
-          className="counter"
-          onClick={() => setCount((count) => count + 1)}
-        >
-          Count is {count}
-        </button>
-      </section>
+    <ThemeProvider theme={theme}>
+      <CssBaseline />
+      <Box
+        sx={{
+          minHeight: '100dvh',
+          background: role === 'public' ? 'radial-gradient(circle at top, #10345a 0%, #06131f 60%)' : undefined,
+          py: role === 'public' ? 2 : 5,
+        }}
+      >
+        <Container maxWidth={role === 'public' ? false : 'md'}>
+          <Paper
+            elevation={role === 'public' ? 0 : 4}
+            sx={{
+              p: role === 'public' ? 4 : 5,
+              borderRadius: role === 'public' ? 0 : 3,
+              textAlign: 'center',
+              backgroundColor: role === 'public' ? 'transparent' : 'background.paper',
+            }}
+          >
+            <Stack spacing={3} sx={{ alignItems: 'center' }}>
+              <Typography variant={role === 'public' ? 'h2' : 'h4'} sx={{ letterSpacing: 1.2 }}>
+                {role === 'admin' ? 'Admin Control' : role === 'judge' ? 'Judge Dashboard' : 'Public Display'}
+              </Typography>
 
-      <div className="ticks"></div>
+              <Stack direction="row" spacing={1}>
+                <Chip label={statusChip} color={session?.status === 'running' ? 'success' : session?.status === 'finished' ? 'error' : 'default'} />
+                <Chip label={wsConnected ? 'WS Connected' : 'WS Reconnecting'} color={wsConnected ? 'primary' : 'warning'} variant="outlined" />
+              </Stack>
 
-      <section id="next-steps">
-        <div id="docs">
-          <svg className="icon" role="presentation" aria-hidden="true">
-            <use href="/icons.svg#documentation-icon"></use>
-          </svg>
-          <h2>Documentation</h2>
-          <p>Your questions, answered</p>
-          <ul>
-            <li>
-              <a href="https://vite.dev/" target="_blank">
-                <img className="logo" src={viteLogo} alt="" />
-                Explore Vite
-              </a>
-            </li>
-            <li>
-              <a href="https://react.dev/" target="_blank">
-                <img className="button-icon" src={reactLogo} alt="" />
-                Learn more
-              </a>
-            </li>
-          </ul>
-        </div>
-        <div id="social">
-          <svg className="icon" role="presentation" aria-hidden="true">
-            <use href="/icons.svg#social-icon"></use>
-          </svg>
-          <h2>Connect with us</h2>
-          <p>Join the Vite community</p>
-          <ul>
-            <li>
-              <a href="https://github.com/vitejs/vite" target="_blank">
-                <svg
-                  className="button-icon"
-                  role="presentation"
-                  aria-hidden="true"
-                >
-                  <use href="/icons.svg#github-icon"></use>
-                </svg>
-                GitHub
-              </a>
-            </li>
-            <li>
-              <a href="https://chat.vite.dev/" target="_blank">
-                <svg
-                  className="button-icon"
-                  role="presentation"
-                  aria-hidden="true"
-                >
-                  <use href="/icons.svg#discord-icon"></use>
-                </svg>
-                Discord
-              </a>
-            </li>
-            <li>
-              <a href="https://x.com/vite_js" target="_blank">
-                <svg
-                  className="button-icon"
-                  role="presentation"
-                  aria-hidden="true"
-                >
-                  <use href="/icons.svg#x-icon"></use>
-                </svg>
-                X.com
-              </a>
-            </li>
-            <li>
-              <a href="https://bsky.app/profile/vite.dev" target="_blank">
-                <svg
-                  className="button-icon"
-                  role="presentation"
-                  aria-hidden="true"
-                >
-                  <use href="/icons.svg#bluesky-icon"></use>
-                </svg>
-                Bluesky
-              </a>
-            </li>
-          </ul>
-        </div>
-      </section>
+              <Typography
+                variant={role === 'public' ? 'h1' : 'h2'}
+                sx={{
+                  fontFamily: '"Roboto Mono", monospace',
+                  fontSize: role === 'public' ? { xs: '4rem', sm: '8rem', md: '12rem' } : { xs: '3rem', sm: '5rem' },
+                  lineHeight: 1,
+                  color: session?.status === 'finished' ? 'error.main' : session?.status === 'running' ? 'success.main' : 'text.primary',
+                }}
+              >
+                {formatTime(elapsedMs)}
+              </Typography>
 
-      <div className="ticks"></div>
-      <section id="spacer"></section>
-    </>
+              <Typography variant={role === 'public' ? 'h4' : 'h6'} color="text.secondary">
+                {session ? `Team: ${session.team}` : 'Waiting for session...'}
+              </Typography>
+
+              {role === 'admin' && (
+                <Stack spacing={2} sx={{ width: '100%', maxWidth: 460 }}>
+                  <TextField
+                    value={teamInput}
+                    onChange={(event) => setTeamInput(event.target.value)}
+                    label="Team Name"
+                    fullWidth
+                    autoComplete="off"
+                  />
+                  <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1.5}>
+                    <Button variant="contained" size="large" onClick={startTimer} disabled={session?.status === 'running'}>
+                      Start Timer
+                    </Button>
+                    <Button variant="contained" color="error" size="large" onClick={stopTimer} disabled={session?.status !== 'running'}>
+                      Stop Timer
+                    </Button>
+                  </Stack>
+                </Stack>
+              )}
+
+              {error && (
+                <Alert severity="warning" sx={{ width: '100%', maxWidth: 720 }}>
+                  {error}
+                </Alert>
+              )}
+            </Stack>
+          </Paper>
+        </Container>
+      </Box>
+    </ThemeProvider>
   )
 }
 

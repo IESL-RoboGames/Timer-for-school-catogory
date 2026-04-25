@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"time"
 
@@ -13,6 +14,8 @@ import (
 	"go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/mongo/options"
 )
+
+const mongoOpTimeout = 5 * time.Second
 
 type Handler struct {
 	db  *mongo.Database
@@ -39,7 +42,10 @@ func (h *Handler) StartTimer(c *gin.Context) {
 		Status:    "running",
 	}
 
-	res, err := h.db.Collection("sessions").InsertOne(context.TODO(), session)
+	dbCtx, cancel := context.WithTimeout(context.Background(), mongoOpTimeout)
+	defer cancel()
+
+	res, err := h.db.Collection("sessions").InsertOne(dbCtx, session)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
@@ -66,7 +72,11 @@ func (h *Handler) StopTimer(c *gin.Context) {
 
 	session, err := h.ProcessStop(req.StopTime)
 	if err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
+		if errors.Is(err, mongo.ErrNoDocuments) {
+			c.JSON(http.StatusNotFound, gin.H{"error": "no running session found"})
+			return
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
 
@@ -88,9 +98,12 @@ func (h *Handler) ProcessStop(stopTime int64) (*models.Session, error) {
 		},
 	}
 
+	dbCtx, cancel := context.WithTimeout(context.Background(), mongoOpTimeout)
+	defer cancel()
+
 	opts := options.FindOneAndUpdate().SetReturnDocument(options.After)
 	var updatedSession models.Session
-	err := h.db.Collection("sessions").FindOneAndUpdate(context.TODO(), filter, update, opts).Decode(&updatedSession)
+	err := h.db.Collection("sessions").FindOneAndUpdate(dbCtx, filter, update, opts).Decode(&updatedSession)
 	if err != nil {
 		return nil, err
 	}
@@ -101,7 +114,10 @@ func (h *Handler) ProcessStop(stopTime int64) (*models.Session, error) {
 		Team: updatedSession.Team,
 		Time: stopTime,
 	}
-	h.db.Collection("events").InsertOne(context.TODO(), event)
+
+	insertCtx, insertCancel := context.WithTimeout(context.Background(), mongoOpTimeout)
+	defer insertCancel()
+	_, _ = h.db.Collection("events").InsertOne(insertCtx, event)
 
 	h.hub.Broadcast(gin.H{
 		"event":   "STOP",
@@ -116,12 +132,24 @@ func (h *Handler) GetState(c *gin.Context) {
 	var session models.Session
 	// Get the latest session (running or just finished)
 	opts := options.FindOne().SetSort(bson.M{"_id": -1})
-	err := h.db.Collection("sessions").FindOne(context.TODO(), bson.M{}, opts).Decode(&session)
-	
+
+	dbCtx, cancel := context.WithTimeout(context.Background(), mongoOpTimeout)
+	defer cancel()
+	err := h.db.Collection("sessions").FindOne(dbCtx, bson.M{}, opts).Decode(&session)
+
 	serverTime := time.Now().UnixMilli()
 
 	if err != nil {
-		c.JSON(http.StatusOK, gin.H{
+		if errors.Is(err, mongo.ErrNoDocuments) {
+			c.JSON(http.StatusOK, gin.H{
+				"serverTime": serverTime,
+				"session":    nil,
+			})
+			return
+		}
+
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"error":      err.Error(),
 			"serverTime": serverTime,
 			"session":    nil,
 		})
