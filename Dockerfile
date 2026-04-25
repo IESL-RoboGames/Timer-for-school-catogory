@@ -26,7 +26,7 @@ COPY --from=backend-builder /app/server .
 COPY --from=frontend-builder /app/web/dist ./web/dist
 
 # Expose port
-EXPOSE 8080
+EXPOSE 8081
 
 # Run the server
 CMD ["./server"]
