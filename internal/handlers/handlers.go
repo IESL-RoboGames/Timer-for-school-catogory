@@ -98,6 +98,7 @@ func (h *Handler) StartTimer(c *gin.Context) {
 
 	var req struct {
 		Team   string `json:"team"`
+		Round  int    `json:"round"`
 		Source string `json:"source"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -114,6 +115,7 @@ func (h *Handler) StartTimer(c *gin.Context) {
 	startTime := time.Now().UnixMilli()
 	session := models.Session{
 		Team:      team,
+		Round:     req.Round,
 		StartTime: startTime,
 		Status:    "running",
 	}
@@ -130,6 +132,7 @@ func (h *Handler) StartTimer(c *gin.Context) {
 	event := models.Event{
 		Type:       "START",
 		Team:       team,
+		Round:      req.Round,
 		Time:       startTime,
 		Source:     fallbackSource(req.Source, "admin-http"),
 		RecordedAt: time.Now().UnixMilli(),
@@ -139,6 +142,7 @@ func (h *Handler) StartTimer(c *gin.Context) {
 	h.hub.Broadcast(gin.H{
 		"event":     "START",
 		"team":      team,
+		"round":     req.Round,
 		"startTime": startTime,
 		"sessionId": res.InsertedID,
 	})
@@ -606,6 +610,7 @@ func (h *Handler) GetResults(c *gin.Context) {
 		results = append(results, gin.H{
 			"id":        session.ID.Hex(),
 			"team":      session.Team,
+			"round":     session.Round,
 			"startTime": session.StartTime,
 			"endTime":   session.EndTime,
 			"elapsedMs": elapsed,

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState, useCallback } from 'react'
 import {
   Alert,
   Box,
@@ -6,7 +6,11 @@ import {
   Chip,
   Container,
   CssBaseline,
+  FormControl,
+  InputLabel,
+  MenuItem,
   Paper,
+  Select,
   Stack,
   Table,
   TableBody,
@@ -18,13 +22,16 @@ import {
   ThemeProvider,
   Typography,
   createTheme,
+  IconButton,
 } from '@mui/material'
+import { ArrowBack as ArrowBackIcon } from '@mui/icons-material'
 
-type SessionStatus = 'running' | 'finished'
+type SessionStatus = 'running' | 'finished' | 'cancelled' | 'hidden'
 
 type Session = {
   id?: string
   team: string
+  round: number
   startTime: number
   endTime?: number
   status: SessionStatus
@@ -50,6 +57,7 @@ type PendingStop = {
 type ResultEntry = {
   id: string
   team: string
+  round: number
   startTime: number
   endTime: number
   elapsedMs: number
@@ -64,6 +72,7 @@ type WsEvent =
   | {
       event: 'START'
       team: string
+      round: number
       startTime: number
     }
   | {
@@ -88,6 +97,17 @@ type WsEvent =
   | {
       event: 'RESULTS_UPDATED'
     }
+
+const TEAM_LIST = [
+  'NeuraX',
+  'Genesis',
+  'R2D2',
+  'VisionSpark',
+  'Axiom',
+  'Codex Robotics',
+  'Controlled Chaos',
+  '404 Team Not Found',
+]
 
 const API_BASE = (import.meta.env.VITE_API_BASE as string | undefined)?.replace(/\/$/, '') ?? ''
 const WS_BASE = (import.meta.env.VITE_WS_BASE as string | undefined)?.replace(/\/$/, '')
@@ -212,7 +232,10 @@ function App() {
   const role = useMemo(() => currentRole(), [])
   const theme = useMemo(() => buildTheme(role), [role])
 
-  const [teamInput, setTeamInput] = useState('')
+  const [selectedTeam, setSelectedTeam] = useState('')
+  const [selectedRound, setSelectedRound] = useState<number>(1)
+  const [isAdminControlView, setIsAdminControlView] = useState(false)
+
   const [session, setSession] = useState<Session | null>(null)
   const [elapsedMs, setElapsedMs] = useState(0)
   const [chargingElapsedMs, setChargingElapsedMs] = useState(0)
@@ -249,6 +272,11 @@ function App() {
       }
 
       setSession(data.session ?? null)
+      if (data.session) {
+        setIsAdminControlView(true)
+        setSelectedTeam(data.session.team)
+        setSelectedRound(data.session.round)
+      }
     } catch {
       setError('Unable to reach backend. Make sure Go server is running.')
     }
@@ -337,12 +365,19 @@ function App() {
       })
 
       if (!response.ok) {
-        const payload = (await response.json()) as { error?: string }
+        let errorMessage = 'Failed to stop timer'
+        try {
+          const payload = (await response.json()) as { error?: string }
+          errorMessage = payload.error ?? errorMessage
+        } catch {
+          // Fallback if not JSON
+        }
+
         if (response.status === 401) {
           setAdminToken('')
           window.localStorage.removeItem(ADMIN_TOKEN_STORAGE_KEY)
         }
-        setError(payload.error ?? 'Stop request failed')
+        setError(errorMessage)
         return false
       }
 
@@ -395,6 +430,7 @@ function App() {
         if (data.event === 'START') {
           setSession({
             team: data.team,
+            round: data.round,
             startTime: data.startTime,
             status: 'running',
           })
@@ -430,7 +466,6 @@ function App() {
           setSession(null)
           setElapsedMs(0)
           setChargingElapsedMs(0)
-          setTeamInput('')
           setError(null)
           if (role === 'admin' || role === 'judge') {
             void fetchResults()
@@ -520,9 +555,9 @@ function App() {
     return () => window.clearInterval(poll)
   }, [role])
 
-  const startTimer = async () => {
-    if (!teamInput.trim()) {
-      setError('Enter a team name first.')
+  const startTimer = useCallback(async () => {
+    if (!selectedTeam) {
+      setError('Select a team first.')
       return
     }
 
@@ -531,34 +566,39 @@ function App() {
         method: 'POST',
         headers: adminHeaders(adminToken),
         body: JSON.stringify({
-          team: teamInput.trim(),
+          team: selectedTeam,
+          round: selectedRound,
           source: 'admin-web',
         }),
       })
 
       if (!response.ok) {
-        const payload = (await response.json()) as { error?: string }
+        let errorMessage = 'Failed to start timer'
+        try {
+          const payload = (await response.json()) as { error?: string }
+          errorMessage = payload.error ?? errorMessage
+        } catch {
+          // Fallback
+        }
         if (response.status === 401) {
           setAdminToken('')
           window.localStorage.removeItem(ADMIN_TOKEN_STORAGE_KEY)
         }
-        setError(payload.error ?? 'Failed to start timer')
+        setError(errorMessage)
         return
       }
 
       const next = (await response.json()) as Session
       setSession(next)
-      setTeamInput('')
       setError(null)
     } catch {
       setError('Cannot reach backend when starting timer.')
     }
-  }
+  }, [selectedTeam, selectedRound, adminToken])
 
-  const stopTimer = async () => {
+  const stopTimer = useCallback(async () => {
     const active = currentSessionRef.current
     if (!active || active.status !== 'running') {
-      setError('No running session to stop.')
       return
     }
 
@@ -572,7 +612,6 @@ function App() {
     await putPendingStop(item)
     setPendingCount((prev) => prev + 1)
 
-    // Best-effort WS stop signal (hub also accepts HTTP stop + indexedDB retries).
     try {
       const ws = wsRef.current
       if (ws && ws.readyState === WebSocket.OPEN) {
@@ -587,13 +626,13 @@ function App() {
         )
       }
     } catch {
-      // Ignore WS send issues; HTTP retry loop handles reliability.
+      // Ignore
     }
 
     await sendStop(item)
-  }
+  }, [serverOffset, adminToken])
 
-  const resumeTimer = async () => {
+  const resumeTimer = useCallback(async () => {
     try {
       const response = await fetch(apiUrl('/resume'), {
         method: 'POST',
@@ -624,9 +663,9 @@ function App() {
       console.error('Resume error:', err)
       setError('Cannot reach backend when resuming timer.')
     }
-  }
+  }, [adminToken])
 
-  const resetTimer = async () => {
+  const resetTimer = useCallback(async () => {
     try {
       const response = await fetch(apiUrl('/reset'), {
         method: 'POST',
@@ -653,14 +692,13 @@ function App() {
       setSession(null)
       setElapsedMs(0)
       setChargingElapsedMs(0)
-      setTeamInput('')
       setError(null)
       void fetchResults()
     } catch (err) {
       console.error('Reset error:', err)
       setError('Cannot reach backend when resetting timer.')
     }
-  }
+  }, [adminToken])
 
   const hideRecord = async (id: string) => {
     if (!window.confirm('Hide this record from the display?')) {
@@ -727,10 +765,9 @@ function App() {
     }
   }
 
-  const startCharging = async () => {
+  const startCharging = useCallback(async () => {
     const active = currentSessionRef.current
-    if (!active || active.status !== 'running') {
-      setError('Start main timer first.')
+    if (!active || active.status !== 'running' || active.chargeStatus === 'running') {
       return
     }
 
@@ -752,12 +789,11 @@ function App() {
     } catch {
       setError('Cannot reach backend when starting charging timer.')
     }
-  }
+  }, [adminToken])
 
-  const stopCharging = async () => {
+  const stopCharging = useCallback(async () => {
     const active = currentSessionRef.current
     if (!active || active.chargeStatus !== 'running') {
-      setError('No running charging timer.')
       return
     }
 
@@ -782,7 +818,39 @@ function App() {
     } catch {
       setError('Cannot reach backend when stopping charging timer.')
     }
-  }
+  }, [serverOffset, adminToken])
+
+  useEffect(() => {
+    if (role !== 'admin' || !isAdminControlView) return
+
+    const handleKey = (e: KeyboardEvent) => {
+      if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) {
+        return
+      }
+
+      if (e.code === 'Space') {
+        e.preventDefault()
+        const active = currentSessionRef.current
+        if (active?.status === 'running') {
+          void stopTimer()
+        } else {
+          void startTimer()
+        }
+      } else if (e.shiftKey || e.code === 'ShiftLeft' || e.code === 'ShiftRight') {
+        const active = currentSessionRef.current
+        if (active?.status === 'running') {
+          if (active.chargeStatus === 'running') {
+            void stopCharging()
+          } else {
+            void startCharging()
+          }
+        }
+      }
+    }
+
+    window.addEventListener('keydown', handleKey)
+    return () => window.removeEventListener('keydown', handleKey)
+  }, [role, isAdminControlView, startTimer, stopTimer, startCharging, stopCharging])
 
   const statusChip = session?.status === 'running' ? 'RUNNING' : session?.status === 'finished' ? 'FINISHED' : 'IDLE'
 
@@ -807,6 +875,14 @@ function App() {
             }}
           >
             <Stack spacing={3} sx={{ alignItems: 'center' }}>
+              {role === 'admin' && isAdminControlView && (
+                <Box sx={{ alignSelf: 'flex-start' }}>
+                  <IconButton onClick={() => setIsAdminControlView(false)} disabled={session?.status === 'running'}>
+                    <ArrowBackIcon />
+                  </IconButton>
+                </Box>
+              )}
+
               <Typography variant={role === 'public' ? 'h2' : 'h4'} sx={{ letterSpacing: 1.2 }}>
                 {role === 'admin' ? 'Admin Control' : role === 'judge' ? 'Judge Dashboard' : 'Public Display'}
               </Typography>
@@ -830,7 +906,7 @@ function App() {
               </Typography>
 
               <Typography variant={role === 'public' ? 'h4' : 'h6'} color="text.secondary">
-                {session ? `Team: ${session.team}` : 'Waiting for session...'}
+                {session ? `Team: ${session.team} (Round ${session.round})` : 'Waiting for session...'}
               </Typography>
 
               <Paper
@@ -875,38 +951,81 @@ function App() {
                 </Stack>
               )}
 
-              {role === 'admin' && (!authRequired || !!adminToken) && (
-                <Stack spacing={2} sx={{ width: '100%', maxWidth: 460 }}>
-                  <TextField
-                    value={teamInput}
-                    onChange={(event) => setTeamInput(event.target.value)}
-                    label="Team Name"
-                    fullWidth
-                    autoComplete="off"
-                  />
-                  <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1.5}>
-                    <Button variant="contained" size="large" onClick={startTimer} disabled={session?.status === 'running'} fullWidth>
-                      Start Timer
+              {role === 'admin' && (!authRequired || !!adminToken) && !isAdminControlView && (
+                <Stack spacing={3} sx={{ width: '100%', maxWidth: 460 }}>
+                  <FormControl fullWidth>
+                    <InputLabel>Select Team</InputLabel>
+                    <Select
+                      value={selectedTeam}
+                      label="Select Team"
+                      onChange={(e) => setSelectedTeam(e.target.value)}
+                    >
+                      {TEAM_LIST.map((team) => (
+                        <MenuItem key={team} value={team}>
+                          {team}
+                        </MenuItem>
+                      ))}
+                    </Select>
+                  </FormControl>
+
+                  <FormControl fullWidth>
+                    <InputLabel>Select Round</InputLabel>
+                    <Select
+                      value={selectedRound}
+                      label="Select Round"
+                      onChange={(e) => setSelectedRound(Number(e.target.value))}
+                    >
+                      {[1, 2, 3].map((r) => (
+                        <MenuItem key={r} value={r}>
+                          Round {r}
+                        </MenuItem>
+                      ))}
+                    </Select>
+                  </FormControl>
+
+                  <Stack direction="row" spacing={1.5}>
+                    <Button
+                      variant="contained"
+                      size="large"
+                      disabled={!selectedTeam}
+                      onClick={() => setIsAdminControlView(true)}
+                      fullWidth
+                    >
+                      Continue
                     </Button>
-                    <Button variant="contained" color="error" size="large" onClick={stopTimer} disabled={session?.status !== 'running'} fullWidth>
-                      Stop Timer
+                    <Button variant="outlined" color="error" size="large" onClick={resetTimer} fullWidth>
+                      Reset Timer
                     </Button>
                   </Stack>
+                </Stack>
+              )}
+
+              {role === 'admin' && (!authRequired || !!adminToken) && isAdminControlView && (
+                <Stack spacing={2} sx={{ width: '100%', maxWidth: 460 }}>
                   <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1.5}>
                     <Button
                       variant="contained"
-                      color="warning"
                       size="large"
-                      onClick={resumeTimer}
-                      disabled={session?.status !== 'finished'}
+                      onClick={startTimer}
+                      disabled={session?.status === 'running'}
                       fullWidth
+                      sx={{ height: 80, fontSize: '1.5rem' }}
                     >
-                      Resume
+                      Start
                     </Button>
-                    <Button variant="outlined" color="error" size="large" onClick={resetTimer} fullWidth>
-                      Reset
+                    <Button
+                      variant="contained"
+                      color="error"
+                      size="large"
+                      onClick={stopTimer}
+                      disabled={session?.status !== 'running'}
+                      fullWidth
+                      sx={{ height: 80, fontSize: '1.5rem' }}
+                    >
+                      Stop
                     </Button>
                   </Stack>
+
                   <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1.5}>
                     <Button
                       variant="outlined"
@@ -928,16 +1047,34 @@ function App() {
                       Stop Charging
                     </Button>
                   </Stack>
+
+                  <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1.5}>
+                    <Button
+                      variant="contained"
+                      color="warning"
+                      size="large"
+                      onClick={resumeTimer}
+                      disabled={session?.status !== 'finished'}
+                      fullWidth
+                    >
+                      Resume
+                    </Button>
+                  </Stack>
+
+                  <Typography variant="caption" color="text.secondary">
+                    Shortcuts: Space (Main Timer), Shift (Charging Timer)
+                  </Typography>
                 </Stack>
               )}
 
-              {(role === 'judge' || role === 'admin') && (
+              {(role === 'judge' || (role === 'admin' && !isAdminControlView)) && (
                 <TableContainer component={Paper} variant="outlined" sx={{ width: '100%', maxWidth: 760 }}>
                   <Table size="small">
                     <TableHead>
                       <TableRow>
                         <TableCell>#</TableCell>
                         <TableCell>Team</TableCell>
+                        <TableCell>Round</TableCell>
                         <TableCell align="right">Time</TableCell>
                         {role === 'admin' && <TableCell align="right">Actions</TableCell>}
                       </TableRow>
@@ -945,15 +1082,16 @@ function App() {
                     <TableBody>
                       {results.length === 0 && (
                         <TableRow>
-                          <TableCell colSpan={role === 'admin' ? 4 : 3} align="center">
+                          <TableCell colSpan={role === 'admin' ? 5 : 4} align="center">
                             No finished teams yet
                           </TableCell>
                         </TableRow>
                       )}
                       {results.map((result, index) => (
-                        <TableRow key={`${result.team}-${result.startTime}-${index}`}>
+                        <TableRow key={`${result.team}-${result.round}-${result.startTime}-${index}`}>
                           <TableCell>{index + 1}</TableCell>
                           <TableCell>{result.team}</TableCell>
+                          <TableCell>Round {result.round}</TableCell>
                           <TableCell align="right" sx={{ fontFamily: '"Roboto Mono", monospace' }}>
                             {formatTime(result.elapsedMs)}
                           </TableCell>
