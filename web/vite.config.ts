@@ -23,6 +23,9 @@ export default defineConfig({
       '/reset': {
         target: 'http://localhost:8080',
       },
+      '/finish': {
+        target: 'http://localhost:8080',
+      },
       '/hide-result': {
         target: 'http://localhost:8080',
       },

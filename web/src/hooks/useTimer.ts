@@ -11,7 +11,7 @@ export function useTimer(session: Session | null, serverOffset: number) {
       return
     }
 
-    if (session.status === 'finished') {
+    if (session.status === 'finished' || session.status === 'paused') {
       setElapsedMs((session.endTime ?? session.startTime) - session.startTime)
       return
     }

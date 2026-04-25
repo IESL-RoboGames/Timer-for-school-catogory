@@ -24,6 +24,7 @@ interface AdminPageProps {
   onChargeStop: () => void
   onResume: () => void
   onReset: () => void
+  onFinish: () => void
   onHide: (id: string) => void
 }
 
@@ -57,14 +58,15 @@ export function AdminPage(props: AdminPageProps) {
             <AdminSelection 
               selectedTeam={props.selectedTeam} selectedRound={props.selectedRound}
               onTeamChange={props.onTeamChange} onRoundChange={props.onRoundChange}
-              onContinue={props.onContinue} onReset={props.onReset}
+              onContinue={props.onContinue}
             />
             <ResultsTable results={props.results} role="admin" onHide={props.onHide} />
           </>
         ) : (
           <AdminControl 
             session={props.session} onStart={props.onStart} onStop={props.onStop}
-            onChargeStart={props.onChargeStart} onChargeStop={props.onChargeStop} onResume={props.onResume}
+            onChargeStart={props.onChargeStart} onChargeStop={props.onChargeStop} 
+            onResume={props.onResume} onReset={props.onReset} onFinish={props.onFinish}
           />
         )}
       </Stack>

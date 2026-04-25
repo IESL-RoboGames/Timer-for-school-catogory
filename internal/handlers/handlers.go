@@ -2,7 +2,6 @@ package handlers
 
 import (
 	"context"
-	"errors"
 	"math"
 	"net/http"
 	"strings"
@@ -43,60 +42,34 @@ func (h *Handler) authorizeAdmin(c *gin.Context) bool {
 	if !h.requireAuth || h.adminToken == "" {
 		return true
 	}
-
 	provided := strings.TrimSpace(c.GetHeader("X-Admin-Key"))
 	if provided == "" {
 		authHeader := strings.TrimSpace(c.GetHeader("Authorization"))
 		provided = strings.TrimPrefix(authHeader, "Bearer ")
 	}
-
 	if provided != h.adminToken {
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
 		return false
 	}
-
 	return true
 }
 
 func (h *Handler) AdminLogin(c *gin.Context) {
-	if !h.requireAuth {
-		c.JSON(http.StatusOK, gin.H{
-			"token":        "",
-			"authRequired": false,
-		})
-		return
-	}
-
-	var req struct {
-		Password string `json:"password"`
-	}
+	var req struct { Password string `json:"password"` }
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
-
-	if strings.TrimSpace(req.Password) == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "password is required"})
-		return
-	}
-
 	if err := bcrypt.CompareHashAndPassword([]byte(h.passwordHash), []byte(req.Password)); err != nil {
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid password"})
 		return
 	}
-
-	c.JSON(http.StatusOK, gin.H{
-		"token":        h.adminToken,
-		"authRequired": true,
-	})
+	c.JSON(http.StatusOK, gin.H{"token": h.adminToken, "authRequired": true})
 }
 
 func (h *Handler) StartTimer(c *gin.Context) {
-	if !h.authorizeAdmin(c) {
-		return
-	}
-
-	var req struct {
+	if !h.authorizeAdmin(c) { return }
+	var req struct { 
 		Team   string `json:"team"`
 		Round  int    `json:"round"`
 		Source string `json:"source"`
@@ -105,574 +78,135 @@ func (h *Handler) StartTimer(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
-
-	team := strings.TrimSpace(req.Team)
-	if team == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "team is required"})
-		return
-	}
-
 	startTime := time.Now().UnixMilli()
-	session := models.Session{
-		Team:      team,
-		Round:     req.Round,
-		StartTime: startTime,
-		Status:    "running",
-	}
-
-	dbCtx, cancel := context.WithTimeout(context.Background(), mongoOpTimeout)
-	defer cancel()
-
-	res, err := h.db.Collection("sessions").InsertOne(dbCtx, session)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-		return
-	}
-
-	event := models.Event{
-		Type:       "START",
-		Team:       team,
-		Round:      req.Round,
-		Time:       startTime,
-		Source:     fallbackSource(req.Source, "admin-http"),
-		RecordedAt: time.Now().UnixMilli(),
-	}
-	_, _ = h.db.Collection("events").InsertOne(dbCtx, event)
-
-	h.hub.Broadcast(gin.H{
-		"event":     "START",
-		"team":      team,
-		"round":     req.Round,
-		"startTime": startTime,
-		"sessionId": res.InsertedID,
-	})
-
+	session := models.Session{ Team: req.Team, Round: req.Round, StartTime: startTime, Status: "running" }
+	dbCtx, cancel := context.WithTimeout(context.Background(), mongoOpTimeout); defer cancel()
+	res, _ := h.db.Collection("sessions").InsertOne(dbCtx, session)
+	h.hub.Broadcast(gin.H{"event": "START", "team": req.Team, "round": req.Round, "startTime": startTime, "sessionId": res.InsertedID})
 	c.JSON(http.StatusOK, session)
 }
 
 func (h *Handler) StopTimer(c *gin.Context) {
-	if !h.authorizeAdmin(c) {
-		return
-	}
-
-	var req struct {
-		StopTime  float64 `json:"stopTime"`
-		RequestID string  `json:"requestId"`
-		Source    string  `json:"source"`
-	}
-	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-		return
-	}
-
-	session, err := h.ProcessStop(int64(math.Round(req.StopTime)), req.RequestID, req.Source)
-	if err != nil {
-		if errors.Is(err, mongo.ErrNoDocuments) {
-			c.JSON(http.StatusNotFound, gin.H{"error": "no running session found"})
-			return
-		}
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-		return
-	}
-
+	if !h.authorizeAdmin(c) { return }
+	var req struct { StopTime float64 `json:"stopTime"` }
+	c.ShouldBindJSON(&req)
+	session, _ := h.ProcessStop(int64(math.Round(req.StopTime)), "", "web")
 	c.JSON(http.StatusOK, session)
 }
 
-func (h *Handler) StartChargingTimer(c *gin.Context) {
-	if !h.authorizeAdmin(c) {
-		return
-	}
-
-	var req struct {
-		Source string `json:"source"`
-	}
-	_ = c.ShouldBindJSON(&req)
-
-	chargeStartTime := time.Now().UnixMilli()
-	filter := bson.M{"status": "running", "chargeStatus": bson.M{"$ne": "running"}}
-	update := bson.M{
-		"$set": bson.M{
-			"chargeStartTime": chargeStartTime,
-			"chargeStatus":    "running",
-		},
-		"$unset": bson.M{
-			"chargeEndTime": "",
-		},
-	}
-
-	dbCtx, cancel := context.WithTimeout(context.Background(), mongoOpTimeout)
-	defer cancel()
-
-	opts := options.FindOneAndUpdate().SetReturnDocument(options.After).SetSort(bson.M{"_id": -1})
-	var updatedSession models.Session
-	err := h.db.Collection("sessions").FindOneAndUpdate(dbCtx, filter, update, opts).Decode(&updatedSession)
-	if err != nil {
-		if errors.Is(err, mongo.ErrNoDocuments) {
-			c.JSON(http.StatusNotFound, gin.H{"error": "no running session available for charging timer"})
-			return
-		}
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-		return
-	}
-
-	event := models.Event{
-		Type:       "CHARGE_START",
-		Team:       updatedSession.Team,
-		Time:       chargeStartTime,
-		Source:     fallbackSource(req.Source, "admin-http"),
-		RecordedAt: time.Now().UnixMilli(),
-	}
-	_, _ = h.db.Collection("events").InsertOne(dbCtx, event)
-
-	h.hub.Broadcast(gin.H{
-		"event":           "CHARGE_START",
-		"team":            updatedSession.Team,
-		"chargeStartTime": chargeStartTime,
-	})
-
-	c.JSON(http.StatusOK, updatedSession)
-}
-
-func (h *Handler) StopChargingTimer(c *gin.Context) {
-	if !h.authorizeAdmin(c) {
-		return
-	}
-
-	var req struct {
-		ChargeStopTime float64 `json:"chargeStopTime"`
-		Source         string  `json:"source"`
-	}
-	_ = c.ShouldBindJSON(&req)
-
-	chargeStopTime := int64(math.Round(req.ChargeStopTime))
-	serverNow := time.Now().UnixMilli()
-	if chargeStopTime == 0 || chargeStopTime > serverNow {
-		chargeStopTime = serverNow
-	}
-
-	filter := bson.M{"status": "running", "chargeStatus": "running"}
-	update := bson.M{
-		"$set": bson.M{
-			"chargeEndTime": chargeStopTime,
-			"chargeStatus":  "finished",
-		},
-	}
-
-	dbCtx, cancel := context.WithTimeout(context.Background(), mongoOpTimeout)
-	defer cancel()
-
-	opts := options.FindOneAndUpdate().SetReturnDocument(options.After).SetSort(bson.M{"_id": -1})
-	var updatedSession models.Session
-	err := h.db.Collection("sessions").FindOneAndUpdate(dbCtx, filter, update, opts).Decode(&updatedSession)
-	if err != nil {
-		if errors.Is(err, mongo.ErrNoDocuments) {
-			c.JSON(http.StatusNotFound, gin.H{"error": "no running charging timer found"})
-			return
-		}
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-		return
-	}
-
-	event := models.Event{
-		Type:       "CHARGE_STOP",
-		Team:       updatedSession.Team,
-		Time:       chargeStopTime,
-		Source:     fallbackSource(req.Source, "admin-http"),
-		RecordedAt: time.Now().UnixMilli(),
-	}
-	_, _ = h.db.Collection("events").InsertOne(dbCtx, event)
-
-	h.hub.Broadcast(gin.H{
-		"event":         "CHARGE_STOP",
-		"team":          updatedSession.Team,
-		"chargeEndTime": chargeStopTime,
-	})
-
-	c.JSON(http.StatusOK, updatedSession)
-}
-
 func (h *Handler) ProcessStop(stopTime int64, requestID, source string) (*models.Session, error) {
-	requestID = strings.TrimSpace(requestID)
-	source = fallbackSource(source, "unknown")
+	dbCtx, cancel := context.WithTimeout(context.Background(), mongoOpTimeout); defer cancel()
+	latest, _ := h.getLatestSession()
+	if latest == nil || latest.Status != "running" { return latest, nil }
 
-	if requestID != "" {
-		exists, err := h.stopEventExists(requestID)
-		if err != nil {
-			return nil, err
-		}
-		if exists {
-			latest, err := h.getLatestSession()
-			if err != nil {
-				return nil, err
-			}
-			return latest, nil
-		}
+	update := bson.M{"$set": bson.M{"endTime": stopTime, "status": "paused"}}
+	opts := options.FindOneAndUpdate().SetReturnDocument(options.After)
+	var updated models.Session
+	h.db.Collection("sessions").FindOneAndUpdate(dbCtx, bson.M{"_id": latest.ID}, update, opts).Decode(&updated)
+	
+	if updated.ChargeStatus == "running" {
+		h.db.Collection("sessions").UpdateByID(dbCtx, updated.ID, bson.M{"$set": bson.M{"chargeEndTime": stopTime, "chargeStatus": "finished"}})
+		updated.ChargeEndTime = stopTime; updated.ChargeStatus = "finished"
+		h.hub.Broadcast(gin.H{"event": "CHARGE_STOP", "team": updated.Team, "chargeEndTime": stopTime})
 	}
-
-	serverNow := time.Now().UnixMilli()
-	if stopTime == 0 || stopTime > serverNow {
-		stopTime = serverNow
-	}
-
-	// Update the latest running session
-	filter := bson.M{"status": "running"}
-	update := bson.M{
-		"$set": bson.M{
-			"endTime": stopTime,
-			"status":  "finished",
-		},
-	}
-
-	dbCtx, cancel := context.WithTimeout(context.Background(), mongoOpTimeout)
-	defer cancel()
-
-	opts := options.FindOneAndUpdate().SetReturnDocument(options.After).SetSort(bson.M{"_id": -1})
-	var updatedSession models.Session
-	err := h.db.Collection("sessions").FindOneAndUpdate(dbCtx, filter, update, opts).Decode(&updatedSession)
-	if err != nil {
-		if errors.Is(err, mongo.ErrNoDocuments) {
-			latest, latestErr := h.getLatestSession()
-			if latestErr == nil && latest.Status == "finished" {
-				return latest, nil
-			}
-		}
-		return nil, err
-	}
-
-	var autoStoppedCharge bool
-	if updatedSession.ChargeStatus == "running" {
-		autoStopCtx, autoStopCancel := context.WithTimeout(context.Background(), mongoOpTimeout)
-		defer autoStopCancel()
-		_, _ = h.db.Collection("sessions").UpdateByID(autoStopCtx, updatedSession.ID, bson.M{
-			"$set": bson.M{
-				"chargeEndTime": stopTime,
-				"chargeStatus":  "finished",
-			},
-		})
-		updatedSession.ChargeEndTime = stopTime
-		updatedSession.ChargeStatus = "finished"
-		autoStoppedCharge = true
-	}
-
-	// Log event
-	event := models.Event{
-		Type:       "STOP",
-		Team:       updatedSession.Team,
-		Time:       stopTime,
-		Source:     source,
-		RequestID:  requestID,
-		RecordedAt: time.Now().UnixMilli(),
-	}
-
-	insertCtx, insertCancel := context.WithTimeout(context.Background(), mongoOpTimeout)
-	defer insertCancel()
-	_, _ = h.db.Collection("events").InsertOne(insertCtx, event)
-
-	h.hub.Broadcast(gin.H{
-		"event":     "STOP",
-		"endTime":   stopTime,
-		"team":      updatedSession.Team,
-		"requestId": requestID,
-		"source":    source,
-	})
-
-	if autoStoppedCharge {
-		h.hub.Broadcast(gin.H{
-			"event":         "CHARGE_STOP",
-			"team":          updatedSession.Team,
-			"chargeEndTime": updatedSession.ChargeEndTime,
-		})
-	}
-
-	return &updatedSession, nil
+	h.hub.Broadcast(gin.H{"event": "STOP", "endTime": stopTime, "team": updated.Team})
+	return &updated, nil
 }
 
-func (h *Handler) stopEventExists(requestID string) (bool, error) {
-	dbCtx, cancel := context.WithTimeout(context.Background(), mongoOpTimeout)
-	defer cancel()
-	count, err := h.db.Collection("events").CountDocuments(dbCtx, bson.M{"type": "STOP", "requestId": requestID})
-	if err != nil {
-		return false, err
+func (h *Handler) FinishTimer(c *gin.Context) {
+	if !h.authorizeAdmin(c) { return }
+	dbCtx, cancel := context.WithTimeout(context.Background(), mongoOpTimeout); defer cancel()
+	latest, _ := h.getLatestSession()
+	if latest != nil {
+		h.db.Collection("sessions").UpdateByID(dbCtx, latest.ID, bson.M{"$set": bson.M{"status": "finished"}})
 	}
-	return count > 0, nil
-}
-
-func (h *Handler) getLatestSession() (*models.Session, error) {
-	dbCtx, cancel := context.WithTimeout(context.Background(), mongoOpTimeout)
-	defer cancel()
-	var session models.Session
-	opts := options.FindOne().SetSort(bson.M{"_id": -1})
-	err := h.db.Collection("sessions").FindOne(dbCtx, bson.M{}, opts).Decode(&session)
-	if err != nil {
-		return nil, err
-	}
-	return &session, nil
-}
-
-func (h *Handler) RecoverStateFromEvents() error {
-	latest, err := h.getLatestSession()
-	if err != nil {
-		if errors.Is(err, mongo.ErrNoDocuments) {
-			return nil
-		}
-		return err
-	}
-
-	if latest.Status != "running" {
-		return nil
-	}
-
-	dbCtx, cancel := context.WithTimeout(context.Background(), mongoOpTimeout)
-	defer cancel()
-
-	filter := bson.M{
-		"type": "STOP",
-		"team": latest.Team,
-		"time": bson.M{"$gte": latest.StartTime},
-	}
-	opts := options.FindOne().SetSort(bson.M{"time": -1, "_id": -1})
-	var stopEvent models.Event
-	err = h.db.Collection("events").FindOne(dbCtx, filter, opts).Decode(&stopEvent)
-	if err != nil {
-		if errors.Is(err, mongo.ErrNoDocuments) {
-			return nil
-		}
-		return err
-	}
-
-	if stopEvent.Time == 0 {
-		return nil
-	}
-
-	updateCtx, updateCancel := context.WithTimeout(context.Background(), mongoOpTimeout)
-	defer updateCancel()
-	_, err = h.db.Collection("sessions").UpdateByID(updateCtx, latest.ID, bson.M{
-		"$set": bson.M{
-			"status":  "finished",
-			"endTime": stopEvent.Time,
-		},
-	})
-	return err
+	h.hub.Broadcast(gin.H{"event": "RESET"})
+	c.JSON(http.StatusOK, gin.H{"status": "ok"})
 }
 
 func (h *Handler) ResumeTimer(c *gin.Context) {
-	if !h.authorizeAdmin(c) {
-		return
-	}
-
-	dbCtx, cancel := context.WithTimeout(context.Background(), mongoOpTimeout)
-	defer cancel()
-
-	latest, err := h.getLatestSession()
-	if err != nil || latest == nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "no session found to resume"})
-		return
-	}
-
-	if latest.Status != "finished" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "only finished sessions can be resumed"})
-		return
-	}
-
+	if !h.authorizeAdmin(c) { return }
+	dbCtx, cancel := context.WithTimeout(context.Background(), mongoOpTimeout); defer cancel()
+	latest, _ := h.getLatestSession()
+	if latest == nil { return }
 	elapsed := latest.EndTime - latest.StartTime
-	if elapsed < 0 {
-		elapsed = 0
-	}
-	newStartTime := time.Now().UnixMilli() - elapsed
-
-	update := bson.M{
-		"$set": bson.M{
-			"startTime": newStartTime,
-			"status":    "running",
-		},
-		"$unset": bson.M{
-			"endTime": "",
-		},
-	}
-
+	newStart := time.Now().UnixMilli() - elapsed
+	update := bson.M{"$set": bson.M{"startTime": newStart, "status": "running"}, "$unset": bson.M{"endTime": ""}}
+	var updated models.Session
 	opts := options.FindOneAndUpdate().SetReturnDocument(options.After)
-	var updatedSession models.Session
-	err = h.db.Collection("sessions").FindOneAndUpdate(dbCtx, bson.M{"_id": latest.ID}, update, opts).Decode(&updatedSession)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-		return
-	}
-
-	event := models.Event{
-		Type:       "RESUME",
-		Team:       updatedSession.Team,
-		Time:       time.Now().UnixMilli(),
-		Source:     "admin-http",
-		RecordedAt: time.Now().UnixMilli(),
-	}
-	_, _ = h.db.Collection("events").InsertOne(dbCtx, event)
-
-	h.hub.Broadcast(gin.H{
-		"event":     "START",
-		"team":      updatedSession.Team,
-		"startTime": updatedSession.StartTime,
-		"sessionId": updatedSession.ID,
-	})
-
-	c.JSON(http.StatusOK, updatedSession)
+	h.db.Collection("sessions").FindOneAndUpdate(dbCtx, bson.M{"_id": latest.ID}, update, opts).Decode(&updated)
+	h.hub.Broadcast(gin.H{"event": "START", "team": updated.Team, "round": updated.Round, "startTime": updated.StartTime})
+	c.JSON(http.StatusOK, updated)
 }
 
 func (h *Handler) ResetTimer(c *gin.Context) {
-	if !h.authorizeAdmin(c) {
-		return
-	}
-
-	dbCtx, cancel := context.WithTimeout(context.Background(), mongoOpTimeout)
-	defer cancel()
-
-	latest, err := h.getLatestSession()
-	if err == nil && latest != nil {
-		_, _ = h.db.Collection("sessions").UpdateByID(dbCtx, latest.ID, bson.M{
-			"$set": bson.M{"status": "cancelled"},
-		})
-
-		event := models.Event{
-			Type:       "RESET",
-			Team:       latest.Team,
-			Time:       time.Now().UnixMilli(),
-			Source:     "admin-http",
-			RecordedAt: time.Now().UnixMilli(),
-		}
-		_, _ = h.db.Collection("events").InsertOne(dbCtx, event)
-	}
-
+	if !h.authorizeAdmin(c) { return }
+	dbCtx, cancel := context.WithTimeout(context.Background(), mongoOpTimeout); defer cancel()
+	latest, _ := h.getLatestSession()
+	if latest != nil { h.db.Collection("sessions").UpdateByID(dbCtx, latest.ID, bson.M{"$set": bson.M{"status": "cancelled"}}) }
 	h.hub.Broadcast(gin.H{"event": "RESET"})
 	c.JSON(http.StatusOK, gin.H{"status": "ok"})
 }
 
 func (h *Handler) GetState(c *gin.Context) {
-	if !h.authorizeAdmin(c) {
-		return
-	}
-	_ = h.RecoverStateFromEvents()
-
-	serverTime := time.Now().UnixMilli()
-	session, err := h.getLatestSession()
-	if err != nil {
-		if errors.Is(err, mongo.ErrNoDocuments) {
-			c.JSON(http.StatusOK, gin.H{
-				"serverTime":   serverTime,
-				"session":      nil,
-				"authRequired": h.requireAuth,
-			})
-			return
-		}
-
-		c.JSON(http.StatusInternalServerError, gin.H{
-			"error":        err.Error(),
-			"serverTime":   serverTime,
-			"session":      nil,
-			"authRequired": h.requireAuth,
-		})
-		return
-	}
-
-	if session != nil && session.Status == "cancelled" {
-		session = nil
-	}
-
-	c.JSON(http.StatusOK, gin.H{
-		"serverTime":   serverTime,
-		"session":      session,
-		"authRequired": h.requireAuth,
-	})
+	if !h.authorizeAdmin(c) { return }
+	session, _ := h.getLatestSession()
+	if session != nil && (session.Status == "cancelled" || session.Status == "finished") { session = nil }
+	c.JSON(http.StatusOK, gin.H{"serverTime": time.Now().UnixMilli(), "session": session, "authRequired": h.requireAuth})
 }
 
 func (h *Handler) GetResults(c *gin.Context) {
-	if !h.authorizeAdmin(c) {
-		return
+	if !h.authorizeAdmin(c) { return }
+	dbCtx, cancel := context.WithTimeout(context.Background(), mongoOpTimeout); defer cancel()
+	cursor, _ := h.db.Collection("sessions").Find(dbCtx, bson.M{"status": "finished"}, options.Find().SetSort(bson.M{"_id": -1}))
+	var res []models.Session
+	cursor.All(dbCtx, &res)
+	results := []gin.H{}
+	for _, s := range res {
+		results = append(results, gin.H{"id": s.ID.Hex(), "team": s.Team, "round": s.Round, "elapsedMs": s.EndTime - s.StartTime})
 	}
-	dbCtx, cancel := context.WithTimeout(context.Background(), mongoOpTimeout)
-	defer cancel()
-
-	filter := bson.M{"status": "finished"}
-	opts := options.Find().SetSort(bson.D{{Key: "startTime", Value: 1}})
-
-	cursor, err := h.db.Collection("sessions").Find(dbCtx, filter, opts)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-		return
-	}
-	defer cursor.Close(dbCtx)
-
-	results := make([]gin.H, 0)
-	for cursor.Next(dbCtx) {
-		var session models.Session
-		if err := cursor.Decode(&session); err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-			return
-		}
-
-		elapsed := session.EndTime - session.StartTime
-		if elapsed < 0 {
-			elapsed = 0
-		}
-
-		results = append(results, gin.H{
-			"id":        session.ID.Hex(),
-			"team":      session.Team,
-			"round":     session.Round,
-			"startTime": session.StartTime,
-			"endTime":   session.EndTime,
-			"elapsedMs": elapsed,
-		})
-	}
-
-	if err := cursor.Err(); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-		return
-	}
-
 	c.JSON(http.StatusOK, gin.H{"results": results})
 }
 
 func (h *Handler) HideSession(c *gin.Context) {
-	if !h.authorizeAdmin(c) {
-		return
-	}
-
-	var req struct {
-		ID string `json:"id"`
-	}
-	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-		return
-	}
-
-	objID, err := primitive.ObjectIDFromHex(req.ID)
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid id"})
-		return
-	}
-
-	dbCtx, cancel := context.WithTimeout(context.Background(), mongoOpTimeout)
-	defer cancel()
-
-	_, err = h.db.Collection("sessions").UpdateByID(dbCtx, objID, bson.M{
-		"$set": bson.M{"status": "hidden"},
-	})
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-		return
-	}
-
+	if !h.authorizeAdmin(c) { return }
+	var req struct { ID string `json:"id"` }
+	c.ShouldBindJSON(&req); objID, _ := primitive.ObjectIDFromHex(req.ID)
+	dbCtx, cancel := context.WithTimeout(context.Background(), mongoOpTimeout); defer cancel()
+	h.db.Collection("sessions").UpdateByID(dbCtx, objID, bson.M{"$set": bson.M{"status": "hidden"}})
 	h.hub.Broadcast(gin.H{"event": "RESULTS_UPDATED"})
 	c.JSON(http.StatusOK, gin.H{"status": "ok"})
 }
 
-func (h *Handler) ServeWs(c *gin.Context) {
-	h.hub.ServeWs(c.Writer, c.Request)
+func (h *Handler) StartChargingTimer(c *gin.Context) {
+	if !h.authorizeAdmin(c) { return }
+	now := time.Now().UnixMilli()
+	dbCtx, cancel := context.WithTimeout(context.Background(), mongoOpTimeout); defer cancel()
+	var updated models.Session
+	opts := options.FindOneAndUpdate().SetReturnDocument(options.After).SetSort(bson.M{"_id": -1})
+	h.db.Collection("sessions").FindOneAndUpdate(dbCtx, bson.M{"status": "running"}, bson.M{"$set": bson.M{"chargeStartTime": now, "chargeStatus": "running"}}, opts).Decode(&updated)
+	h.hub.Broadcast(gin.H{"event": "CHARGE_START", "team": updated.Team, "chargeStartTime": now})
+	c.JSON(http.StatusOK, updated)
 }
 
-func fallbackSource(value, fallback string) string {
-	trimmed := strings.TrimSpace(value)
-	if trimmed == "" {
-		return fallback
-	}
-	return trimmed
+func (h *Handler) StopChargingTimer(c *gin.Context) {
+	if !h.authorizeAdmin(c) { return }
+	var req struct { ChargeStopTime float64 `json:"chargeStopTime"` }
+	c.ShouldBindJSON(&req); stop := int64(math.Round(req.ChargeStopTime))
+	dbCtx, cancel := context.WithTimeout(context.Background(), mongoOpTimeout); defer cancel()
+	var updated models.Session
+	opts := options.FindOneAndUpdate().SetReturnDocument(options.After).SetSort(bson.M{"_id": -1})
+	h.db.Collection("sessions").FindOneAndUpdate(dbCtx, bson.M{"status": "running", "chargeStatus": "running"}, bson.M{"$set": bson.M{"chargeEndTime": stop, "chargeStatus": "finished"}}, opts).Decode(&updated)
+	h.hub.Broadcast(gin.H{"event": "CHARGE_STOP", "team": updated.Team, "chargeEndTime": stop})
+	c.JSON(http.StatusOK, updated)
 }
+
+func (h *Handler) ServeWs(c *gin.Context) { h.hub.ServeWs(c.Writer, c.Request) }
+func (h *Handler) getLatestSession() (*models.Session, error) {
+	dbCtx, cancel := context.WithTimeout(context.Background(), mongoOpTimeout); defer cancel()
+	var s models.Session
+	err := h.db.Collection("sessions").FindOne(dbCtx, bson.M{}, options.FindOne().SetSort(bson.M{"_id": -1})).Decode(&s)
+	if err != nil { return nil, err }
+	return &s, nil
+}
+func (h *Handler) RecoverStateFromEvents() error { return nil }

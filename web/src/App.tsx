@@ -87,8 +87,14 @@ export default function App() {
   const resetTimer = useCallback(async () => {
     try {
       await post('/reset')
-      setSession(null); setControlView(false); setResults([])
-      void fetchResults()
+      setSession(null); void fetchResults()
+    } catch { }
+  }, [post, fetchResults])
+
+  const finishTimer = useCallback(async () => {
+    try {
+      await post('/finish')
+      setSession(null); void fetchResults()
     } catch { }
   }, [post, fetchResults])
 
@@ -102,8 +108,8 @@ export default function App() {
 
   const onWsMessage = useCallback((data: WsEvent) => {
     if (data.event === 'START') { setSession({ team: data.team, round: data.round, startTime: data.startTime, status: 'running' }); fetchResults() }
-    else if (data.event === 'STOP') { setSession(prev => prev ? { ...prev, status: 'finished', endTime: data.endTime } : null); fetchResults() }
-    else if (data.event === 'RESET') { setSession(null); fetchResults() }
+    else if (data.event === 'STOP') { setSession(prev => prev ? { ...prev, status: 'paused', endTime: data.endTime } : null); fetchResults() }
+    else if (data.event === 'RESET') { setSession(null); setElapsedMs(0); setChargingMs(0); fetchResults() }
     else if (data.event === 'RESULTS_UPDATED') fetchResults()
     else if (data.event === 'CHARGE_START') setSession(prev => prev ? { ...prev, chargeStartTime: data.chargeStartTime, chargeStatus: 'running' } : null)
     else if (data.event === 'CHARGE_STOP') setSession(prev => prev ? { ...prev, chargeEndTime: data.chargeEndTime, chargeStatus: 'finished' } : null)
@@ -124,25 +130,17 @@ export default function App() {
     if (role !== 'admin' || !controlView) return
     const handleKey = (e: KeyboardEvent) => {
       if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return
-      
       if (e.code === 'Space') { 
         e.preventDefault()
         const s = currentSessionRef.current
-        if (s?.status === 'running') {
-          void stopTimer()
-        } else if (s?.status === 'finished') {
-          void resumeTimer()
-        } else {
-          void startTimer()
-        }
+        if (s?.status === 'running') void stopTimer()
+        else if (s?.status === 'paused' || s?.status === 'finished') void resumeTimer()
+        else void startTimer()
       } else if (e.key === 'Shift') { 
         const s = currentSessionRef.current
         if (s?.status === 'running') {
-          if (s.chargeStatus === 'running') {
-            void stopCharging()
-          } else {
-            void startCharging()
-          }
+          if (s.chargeStatus === 'running') void stopCharging()
+          else void startCharging()
         }
       }
     }
@@ -156,13 +154,11 @@ export default function App() {
   return (
     <ThemeProvider theme={buildTheme(role)}>
       <CssBaseline />
-      
       {error && (
         <Box sx={{ position: 'fixed', top: 20, left: '50%', transform: 'translateX(-50%)', zIndex: 9999, width: '100%', maxWidth: 400 }}>
           <Alert severity="error" variant="filled" onClose={() => setError(null)}>{error}</Alert>
         </Box>
       )}
-
       {role === 'public' ? <PublicPage {...commonProps} /> :
        role === 'judge' ? <JudgePage {...commonProps} /> :
        <AdminPage {...commonProps} 
@@ -174,6 +170,7 @@ export default function App() {
          onChargeStop={stopCharging}
          onResume={resumeTimer}
          onReset={resetTimer}
+         onFinish={finishTimer}
          onHide={(id) => post('/hide-result', { id }).then(fetchResults)}
        />}
     </ThemeProvider>

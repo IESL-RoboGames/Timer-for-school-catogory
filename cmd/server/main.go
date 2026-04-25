@@ -76,6 +76,7 @@ func main() {
 	r.POST("/stop", h.StopTimer)
 	r.POST("/resume", h.ResumeTimer)
 	r.POST("/reset", h.ResetTimer)
+	r.POST("/finish", h.FinishTimer)
 	r.POST("/hide-result", h.HideSession)
 	r.POST("/charge/start", h.StartChargingTimer)
 	r.POST("/charge/stop", h.StopChargingTimer)

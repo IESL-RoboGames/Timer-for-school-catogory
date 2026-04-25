@@ -34,7 +34,6 @@ export function AdminSelection({
       </FormControl>
       <Stack direction="row" spacing={2}>
         <Button fullWidth size="large" variant="contained" disabled={!selectedTeam} onClick={onContinue}>Continue</Button>
-        <Button fullWidth size="large" variant="outlined" color="error" onClick={onReset}>Reset All</Button>
       </Stack>
     </Stack>
   )
