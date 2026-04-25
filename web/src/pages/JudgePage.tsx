@@ -1,4 +1,4 @@
-import { Stack, Typography, Paper, Container } from '@mui/material'
+import { Stack, Typography, Container, Box } from '@mui/material'
 import type { Session, ResultEntry } from '../types'
 import { TimerDisplay } from '../components/common/TimerDisplay'
 import { ResultsTable } from '../components/common/ResultsTable'
@@ -12,23 +12,34 @@ interface JudgePageProps {
 
 export function JudgePage({ session, results, elapsedMs, chargingMs }: JudgePageProps) {
   return (
-    <Container maxWidth="md" sx={{ py: 4 }}>
-      <Stack spacing={4} sx={{ alignItems: 'center' }}>
-        <TimerDisplay ms={elapsedMs} isFinished={session?.status === 'finished'} isRunning={session?.status === 'running'} />
-        
-        {session && (
-          <Typography variant="h4" color="primary" sx={{ fontWeight: 800 }}>
-            {session.team} <Typography component="span" variant="h5" color="text.secondary">Round {session.round}</Typography>
-          </Typography>
-        )}
+    <Box sx={{ minHeight: '100dvh', bgcolor: 'background.default', width: '100%', overflowX: 'hidden' }}>
+      <Container maxWidth="md" sx={{ py: 2 }}>
+        <Stack spacing={2} sx={{ alignItems: 'center' }}>
+          <Stack direction="row" spacing={4} sx={{ width: '100%', justifyContent: 'center', alignItems: 'center' }}>
+            <Box sx={{ textAlign: 'center' }}>
+              <Typography variant="caption" color="text.secondary" sx={{ fontWeight: 700 }}>MAIN TIMER</Typography>
+              <TimerDisplay ms={elapsedMs} size="small" isFinished={session?.status === 'finished'} isRunning={session?.status === 'running'} />
+            </Box>
+            <Box sx={{ textAlign: 'center' }}>
+              <Typography variant="caption" color="text.secondary" sx={{ fontWeight: 700 }}>CHARGING</Typography>
+              <TimerDisplay ms={chargingMs} size="small" isRunning={session?.chargeStatus === 'running'} isFinished={session?.chargeStatus === 'finished'} />
+            </Box>
+          </Stack>
+          
+          {session && (
+            <Typography variant="h4" color="primary" sx={{ 
+              fontWeight: 900, 
+              textAlign: 'center',
+              textTransform: 'uppercase',
+              mb: 1
+            }}>
+              {session.team} <Box component="span" sx={{ ml: 2, color: 'text.secondary', fontSize: '0.8em' }}>RD {session.round}</Box>
+            </Typography>
+          )}
 
-        <Paper variant="outlined" sx={{ p: 2, minWidth: 280, textAlign: 'center' }}>
-          <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mb: 1 }}>CHARGING</Typography>
-          <TimerDisplay ms={chargingMs} size="small" isRunning={session?.chargeStatus === 'running'} isFinished={session?.chargeStatus === 'finished'} />
-        </Paper>
-
-        <ResultsTable results={results} role="judge" />
-      </Stack>
-    </Container>
+          <ResultsTable results={results} role="judge" />
+        </Stack>
+      </Container>
+    </Box>
   )
 }

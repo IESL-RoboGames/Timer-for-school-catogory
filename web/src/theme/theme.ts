@@ -29,26 +29,36 @@ export function buildTheme(role: 'admin' | 'judge' | 'public') {
     isPublic
       ? { 
           mode: 'dark' as const, 
-          primary: { main: '#2ec4b6' }, 
-          background: { default: '#000000', paper: '#0a0a0a' },
+          primary: { main: '#00d2ff' }, 
+          background: { default: '#0a192f', paper: '#112240' },
           text: { primary: '#ffffff' }
         }
       : role === 'judge'
         ? { mode: 'light' as const, primary: { main: '#0b6e4f' }, background: { default: '#f3f8f5', paper: '#ffffff' } }
-        : { mode: 'light' as const, primary: { main: '#0f4c81' }, background: { default: '#eef3f9', paper: '#ffffff' } }
+        : { mode: 'dark' as const, primary: { main: '#64ffda' }, background: { default: '#020c1b', paper: '#112240' } }
 
   return createTheme({
     typography: {
       fontFamily: '"DM Sans", "Roboto Mono", "Segoe UI", sans-serif',
       h1: { fontWeight: 900, letterSpacing: '-0.02em' },
-      h2: { fontWeight: 700 },
+      h2: { fontWeight: 800, fontSize: '3.5rem' },
     },
     palette,
     components: {
+      MuiButton: {
+        styleOverrides: {
+          root: {
+            borderRadius: 12,
+            textTransform: 'none',
+            fontWeight: 700,
+          },
+        },
+      },
       MuiPaper: {
         styleOverrides: {
           root: {
             backgroundImage: 'none',
+            borderRadius: 16,
           },
         },
       },

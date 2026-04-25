@@ -109,7 +109,7 @@ export default function App() {
   const onWsMessage = useCallback((data: WsEvent) => {
     if (data.event === 'START') { setSession({ team: data.team, round: data.round, startTime: data.startTime, status: 'running' }); fetchResults() }
     else if (data.event === 'STOP') { setSession(prev => prev ? { ...prev, status: 'paused', endTime: data.endTime } : null); fetchResults() }
-    else if (data.event === 'RESET') { setSession(null); setElapsedMs(0); setChargingMs(0); fetchResults() }
+    else if (data.event === 'RESET') { setSession(null); fetchResults() }
     else if (data.event === 'RESULTS_UPDATED') fetchResults()
     else if (data.event === 'CHARGE_START') setSession(prev => prev ? { ...prev, chargeStartTime: data.chargeStartTime, chargeStatus: 'running' } : null)
     else if (data.event === 'CHARGE_STOP') setSession(prev => prev ? { ...prev, chargeEndTime: data.chargeEndTime, chargeStatus: 'finished' } : null)

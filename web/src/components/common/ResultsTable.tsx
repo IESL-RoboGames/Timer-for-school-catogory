@@ -22,21 +22,22 @@ export function ResultsTable({ results, role, onHide }: ResultsTableProps) {
   const isAdmin = role === 'admin'
 
   return (
-    <TableContainer component={Paper} variant="outlined" sx={{ width: '100%', maxWidth: 800, bgcolor: 'background.paper' }}>
+    <TableContainer component={Paper} variant="outlined" sx={{ width: '100%', maxWidth: 850, bgcolor: 'background.paper' }}>
       <Table size="small">
         <TableHead>
           <TableRow>
             <TableCell sx={{ fontWeight: 'bold' }}>#</TableCell>
             <TableCell sx={{ fontWeight: 'bold' }}>Team</TableCell>
             <TableCell sx={{ fontWeight: 'bold' }}>Round</TableCell>
-            <TableCell align="right" sx={{ fontWeight: 'bold' }}>Time</TableCell>
+            <TableCell align="right" sx={{ fontWeight: 'bold' }}>Main Time</TableCell>
+            <TableCell align="right" sx={{ fontWeight: 'bold' }}>Charge Time</TableCell>
             {isAdmin && <TableCell align="right" sx={{ fontWeight: 'bold' }}>Actions</TableCell>}
           </TableRow>
         </TableHead>
         <TableBody>
           {results.length === 0 && (
             <TableRow>
-              <TableCell colSpan={isAdmin ? 5 : 4} align="center" sx={{ py: 3 }}>
+              <TableCell colSpan={isAdmin ? 6 : 5} align="center" sx={{ py: 3 }}>
                 No finished teams yet
               </TableCell>
             </TableRow>
@@ -46,12 +47,15 @@ export function ResultsTable({ results, role, onHide }: ResultsTableProps) {
             return (
               <TableRow key={`${result.id}-${index}`} sx={{ '&:last-child td, &:last-child th': { border: 0 } }}>
                 <TableCell>{index + 1}</TableCell>
-                <TableCell sx={{ color: teamColor, fontWeight: 800, fontSize: '1.1rem' }}>
+                <TableCell sx={{ color: teamColor, fontWeight: 800, fontSize: '1rem' }}>
                   {result.team}
                 </TableCell>
-                <TableCell>Round {result.round}</TableCell>
+                <TableCell>RD {result.round}</TableCell>
                 <TableCell align="right" sx={{ fontFamily: '"Roboto Mono", monospace', fontWeight: 700 }}>
                   {formatTime(result.elapsedMs)}
+                </TableCell>
+                <TableCell align="right" sx={{ fontFamily: '"Roboto Mono", monospace', color: 'text.secondary' }}>
+                  {formatTime(result.chargeMs)}
                 </TableCell>
                 {isAdmin && onHide && (
                   <TableCell align="right">

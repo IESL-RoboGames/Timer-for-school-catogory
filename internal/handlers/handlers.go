@@ -163,7 +163,19 @@ func (h *Handler) GetResults(c *gin.Context) {
 	cursor.All(dbCtx, &res)
 	results := []gin.H{}
 	for _, s := range res {
-		results = append(results, gin.H{"id": s.ID.Hex(), "team": s.Team, "round": s.Round, "elapsedMs": s.EndTime - s.StartTime})
+		elapsed := s.EndTime - s.StartTime
+		chargeDuration := int64(0)
+		if s.ChargeEndTime > s.ChargeStartTime && s.ChargeStartTime > 0 {
+			chargeDuration = s.ChargeEndTime - s.ChargeStartTime
+		}
+		
+		results = append(results, gin.H{
+			"id":        s.ID.Hex(),
+			"team":      s.Team,
+			"round":     s.Round,
+			"elapsedMs": elapsed,
+			"chargeMs":  chargeDuration,
+		})
 	}
 	c.JSON(http.StatusOK, gin.H{"results": results})
 }

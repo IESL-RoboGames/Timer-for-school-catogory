@@ -26,6 +26,7 @@ export type ResultEntry = {
   startTime: number
   endTime: number
   elapsedMs: number
+  chargeMs: number
 }
 
 export type ResultsResponse = {

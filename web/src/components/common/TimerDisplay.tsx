@@ -12,8 +12,8 @@ export function formatTime(ms: number): string {
   const totalSeconds = Math.floor(safe / 1000)
   const minutes = Math.floor(totalSeconds / 60)
   const seconds = totalSeconds % 60
-  const deciseconds = Math.floor((safe % 1000) / 100)
-  return `${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}.${deciseconds}`
+  const centiseconds = Math.floor((safe % 1000) / 10)
+  return `${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}.${centiseconds.toString().padStart(2, '0')}`
 }
 
 export function TimerDisplay({ ms, isFinished, isRunning, size = 'large' }: TimerDisplayProps) {

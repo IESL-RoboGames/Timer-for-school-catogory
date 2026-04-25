@@ -29,47 +29,64 @@ interface AdminPageProps {
 }
 
 export function AdminPage(props: AdminPageProps) {
+  const displayTeam = props.session?.team || props.selectedTeam
+  const displayRound = props.session?.round || props.selectedRound
+
   return (
-    <Container maxWidth="md" sx={{ py: 4 }}>
-      <Stack spacing={4} sx={{ alignItems: 'center' }}>
-        {props.isAdminControlView && (
-          <Box sx={{ alignSelf: 'flex-start' }}>
-            <IconButton onClick={props.onBack} disabled={props.session?.status === 'running'}>
-              <ArrowBackIcon />
-            </IconButton>
-          </Box>
-        )}
+    <Box sx={{ minHeight: '100dvh', bgcolor: 'background.default', width: '100%', overflowX: 'hidden' }}>
+      <Container maxWidth="md" sx={{ py: 2, px: { xs: 1, sm: 2 } }}>
+        <Stack spacing={2} sx={{ alignItems: 'center', width: '100%' }}>
+          {props.isAdminControlView && (
+            <Box sx={{ alignSelf: 'flex-start', width: '100%' }}>
+              <IconButton onClick={props.onBack} disabled={props.session?.status === 'running'} sx={{ color: 'primary.main' }}>
+                <ArrowBackIcon fontSize="medium" />
+              </IconButton>
+            </Box>
+          )}
 
-        <TimerDisplay ms={props.elapsedMs} isFinished={props.session?.status === 'finished'} isRunning={props.session?.status === 'running'} />
-        
-        {props.session && (
-          <Typography variant="h4" color="primary" sx={{ fontWeight: 800 }}>
-            {props.session.team} <Typography component="span" variant="h5" color="text.secondary">Round {props.session.round}</Typography>
-          </Typography>
-        )}
+          <Stack direction="row" spacing={4} sx={{ width: '100%', justifyContent: 'center', alignItems: 'center' }}>
+            <Box sx={{ textAlign: 'center' }}>
+              <Typography variant="caption" color="text.secondary" sx={{ fontWeight: 700 }}>MAIN TIMER</Typography>
+              <TimerDisplay ms={props.elapsedMs} size="small" isFinished={props.session?.status === 'finished'} isRunning={props.session?.status === 'running'} />
+            </Box>
+            <Box sx={{ textAlign: 'center' }}>
+              <Typography variant="caption" color="text.secondary" sx={{ fontWeight: 700 }}>CHARGING</Typography>
+              <TimerDisplay ms={props.chargingMs} size="small" isRunning={props.session?.chargeStatus === 'running'} isFinished={props.session?.chargeStatus === 'finished'} />
+            </Box>
+          </Stack>
+          
+          {(props.isAdminControlView || props.session) && (
+            <Typography variant="h4" color="primary" sx={{ 
+              fontWeight: 900, 
+              textAlign: 'center',
+              textTransform: 'uppercase',
+              mb: 1
+            }}>
+              {displayTeam} 
+              <Box component="span" sx={{ ml: 2, color: 'text.secondary', fontSize: '0.8em' }}>
+                RD {displayRound}
+              </Box>
+            </Typography>
+          )}
 
-        <Paper variant="outlined" sx={{ p: 2, minWidth: 280, textAlign: 'center' }}>
-          <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mb: 1 }}>CHARGING</Typography>
-          <TimerDisplay ms={props.chargingMs} size="small" isRunning={props.session?.chargeStatus === 'running'} isFinished={props.session?.chargeStatus === 'finished'} />
-        </Paper>
-
-        {!props.isAdminControlView ? (
-          <>
-            <AdminSelection 
-              selectedTeam={props.selectedTeam} selectedRound={props.selectedRound}
-              onTeamChange={props.onTeamChange} onRoundChange={props.onRoundChange}
-              onContinue={props.onContinue}
+          {!props.isAdminControlView ? (
+            <Stack spacing={3} sx={{ width: '100%', alignItems: 'center' }}>
+              <AdminSelection 
+                selectedTeam={props.selectedTeam} selectedRound={props.selectedRound}
+                onTeamChange={props.onTeamChange} onRoundChange={props.onRoundChange}
+                onContinue={props.onContinue}
+              />
+              <ResultsTable results={props.results} role="admin" onHide={props.onHide} />
+            </Stack>
+          ) : (
+            <AdminControl 
+              session={props.session} onStart={props.onStart} onStop={props.onStop}
+              onChargeStart={props.onChargeStart} onChargeStop={props.onChargeStop} 
+              onResume={props.onResume} onReset={props.onReset} onFinish={props.onFinish}
             />
-            <ResultsTable results={props.results} role="admin" onHide={props.onHide} />
-          </>
-        ) : (
-          <AdminControl 
-            session={props.session} onStart={props.onStart} onStop={props.onStop}
-            onChargeStart={props.onChargeStart} onChargeStop={props.onChargeStop} 
-            onResume={props.onResume} onReset={props.onReset} onFinish={props.onFinish}
-          />
-        )}
-      </Stack>
-    </Container>
+          )}
+        </Stack>
+      </Container>
+    </Box>
   )
 }
