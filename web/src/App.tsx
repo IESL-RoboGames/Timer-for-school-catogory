@@ -30,6 +30,13 @@ type StateResponse = {
   error?: string
 }
 
+type PendingStop = {
+  id: string
+  stopTime: number
+  source: string
+  createdAt: number
+}
+
 type WsEvent =
   | {
       event: 'START'
@@ -40,10 +47,15 @@ type WsEvent =
       event: 'STOP'
       team: string
       endTime: number
+      requestId?: string
     }
 
 const API_BASE = (import.meta.env.VITE_API_BASE as string | undefined)?.replace(/\/$/, '') ?? ''
 const WS_BASE = (import.meta.env.VITE_WS_BASE as string | undefined)?.replace(/\/$/, '')
+const ADMIN_KEY = (import.meta.env.VITE_ADMIN_KEY as string | undefined)?.trim() ?? ''
+
+const STOP_DB_NAME = 'robogames-timer-db'
+const STOP_STORE = 'stop_queue'
 
 function apiUrl(path: string): string {
   return `${API_BASE}${path}`
@@ -96,6 +108,66 @@ function buildTheme(role: 'admin' | 'judge' | 'public') {
   })
 }
 
+function adminHeaders(): HeadersInit {
+  const headers: Record<string, string> = { 'Content-Type': 'application/json' }
+  if (ADMIN_KEY) {
+    headers['X-Admin-Key'] = ADMIN_KEY
+  }
+  return headers
+}
+
+function openStopDb(): Promise<IDBDatabase> {
+  return new Promise((resolve, reject) => {
+    const request = window.indexedDB.open(STOP_DB_NAME, 1)
+
+    request.onupgradeneeded = () => {
+      const db = request.result
+      if (!db.objectStoreNames.contains(STOP_STORE)) {
+        db.createObjectStore(STOP_STORE, { keyPath: 'id' })
+      }
+    }
+
+    request.onsuccess = () => resolve(request.result)
+    request.onerror = () => reject(request.error)
+  })
+}
+
+async function putPendingStop(stop: PendingStop): Promise<void> {
+  const db = await openStopDb()
+  await new Promise<void>((resolve, reject) => {
+    const tx = db.transaction(STOP_STORE, 'readwrite')
+    tx.objectStore(STOP_STORE).put(stop)
+    tx.oncomplete = () => resolve()
+    tx.onerror = () => reject(tx.error)
+  })
+  db.close()
+}
+
+async function getPendingStops(): Promise<PendingStop[]> {
+  const db = await openStopDb()
+  const result = await new Promise<PendingStop[]>((resolve, reject) => {
+    const tx = db.transaction(STOP_STORE, 'readonly')
+    const req = tx.objectStore(STOP_STORE).getAll()
+    req.onsuccess = () => resolve((req.result as PendingStop[]) ?? [])
+    req.onerror = () => reject(req.error)
+  })
+  db.close()
+
+  result.sort((a, b) => a.createdAt - b.createdAt)
+  return result
+}
+
+async function deletePendingStop(id: string): Promise<void> {
+  const db = await openStopDb()
+  await new Promise<void>((resolve, reject) => {
+    const tx = db.transaction(STOP_STORE, 'readwrite')
+    tx.objectStore(STOP_STORE).delete(id)
+    tx.oncomplete = () => resolve()
+    tx.onerror = () => reject(tx.error)
+  })
+  db.close()
+}
+
 function App() {
   const role = useMemo(() => currentRole(), [])
   const theme = useMemo(() => buildTheme(role), [role])
@@ -106,10 +178,11 @@ function App() {
   const [serverOffset, setServerOffset] = useState(0)
   const [error, setError] = useState<string | null>(null)
   const [wsConnected, setWsConnected] = useState(false)
+  const [pendingCount, setPendingCount] = useState(0)
 
   const currentSessionRef = useRef<Session | null>(null)
-  const pendingStopRef = useRef<number | null>(null)
   const wsRef = useRef<WebSocket | null>(null)
+  const retryInFlightRef = useRef(false)
 
   useEffect(() => {
     currentSessionRef.current = session
@@ -164,6 +237,53 @@ function App() {
     return () => window.clearInterval(timerId)
   }, [serverOffset, session])
 
+  const sendStop = async (item: PendingStop): Promise<boolean> => {
+    try {
+      const response = await fetch(apiUrl('/stop'), {
+        method: 'POST',
+        headers: adminHeaders(),
+        body: JSON.stringify({
+          stopTime: item.stopTime,
+          requestId: item.id,
+          source: item.source,
+        }),
+      })
+
+      if (!response.ok) {
+        const payload = (await response.json()) as { error?: string }
+        setError(payload.error ?? 'Stop request failed')
+        return false
+      }
+
+      const next = (await response.json()) as Session
+      setSession(next)
+      setError(null)
+      await deletePendingStop(item.id)
+      setPendingCount((prev) => Math.max(0, prev - 1))
+      return true
+    } catch {
+      setError('Stop request failed, retrying...')
+      return false
+    }
+  }
+
+  const flushPendingStops = async () => {
+    if (retryInFlightRef.current) {
+      return
+    }
+
+    retryInFlightRef.current = true
+    try {
+      const pending = await getPendingStops()
+      setPendingCount(pending.length)
+      for (const item of pending) {
+        await sendStop(item)
+      }
+    } finally {
+      retryInFlightRef.current = false
+    }
+  }
+
   useEffect(() => {
     let ws: WebSocket | null = null
     let reconnectTimer: number | null = null
@@ -188,7 +308,6 @@ function App() {
           }
           setSession(next)
           setError(null)
-          pendingStopRef.current = null
           return
         }
 
@@ -204,7 +323,12 @@ function App() {
             endTime: data.endTime,
           })
           setError(null)
-          pendingStopRef.current = null
+
+          if (data.requestId) {
+            void deletePendingStop(data.requestId).then(() => {
+              setPendingCount((prev) => Math.max(0, prev - 1))
+            })
+          }
         }
       }
 
@@ -237,38 +361,13 @@ function App() {
       return
     }
 
+    void flushPendingStops()
     const retry = window.setInterval(() => {
-      const pendingStop = pendingStopRef.current
-      if (pendingStop) {
-        void sendStop(pendingStop)
-      }
+      void flushPendingStops()
     }, 2000)
 
     return () => window.clearInterval(retry)
   }, [role])
-
-  const sendStop = async (stopTime: number) => {
-    try {
-      const response = await fetch(apiUrl('/stop'), {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ stopTime }),
-      })
-
-      if (!response.ok) {
-        const payload = (await response.json()) as { error?: string }
-        setError(payload.error ?? 'Stop request failed')
-        return
-      }
-
-      const next = (await response.json()) as Session
-      setSession(next)
-      pendingStopRef.current = null
-      setError(null)
-    } catch {
-      setError('Stop request failed, retrying...')
-    }
-  }
 
   const startTimer = async () => {
     if (!teamInput.trim()) {
@@ -279,8 +378,11 @@ function App() {
     try {
       const response = await fetch(apiUrl('/start'), {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ team: teamInput.trim() }),
+        headers: adminHeaders(),
+        body: JSON.stringify({
+          team: teamInput.trim(),
+          source: 'admin-web',
+        }),
       })
 
       if (!response.ok) {
@@ -305,20 +407,35 @@ function App() {
       return
     }
 
-    const stopTime = Math.round(Date.now() + serverOffset)
-    pendingStopRef.current = stopTime
+    const item: PendingStop = {
+      id: window.crypto.randomUUID(),
+      stopTime: Math.round(Date.now() + serverOffset),
+      source: 'admin-web',
+      createdAt: Date.now(),
+    }
 
-    // Best-effort WS stop signal (hub also accepts HTTP stop + retries).
+    await putPendingStop(item)
+    setPendingCount((prev) => prev + 1)
+
+    // Best-effort WS stop signal (hub also accepts HTTP stop + indexedDB retries).
     try {
       const ws = wsRef.current
       if (ws && ws.readyState === WebSocket.OPEN) {
-        ws.send(JSON.stringify({ type: 'STOP', stopTime }))
+        ws.send(
+          JSON.stringify({
+            type: 'STOP',
+            stopTime: item.stopTime,
+            requestId: item.id,
+            source: item.source,
+            adminKey: ADMIN_KEY,
+          }),
+        )
       }
     } catch {
       // Ignore WS send issues; HTTP retry loop handles reliability.
     }
 
-    await sendStop(stopTime)
+    await sendStop(item)
   }
 
   const statusChip = session?.status === 'running' ? 'RUNNING' : session?.status === 'finished' ? 'FINISHED' : 'IDLE'
@@ -351,6 +468,7 @@ function App() {
               <Stack direction="row" spacing={1}>
                 <Chip label={statusChip} color={session?.status === 'running' ? 'success' : session?.status === 'finished' ? 'error' : 'default'} />
                 <Chip label={wsConnected ? 'WS Connected' : 'WS Reconnecting'} color={wsConnected ? 'primary' : 'warning'} variant="outlined" />
+                {role === 'admin' && pendingCount > 0 && <Chip label={`Pending STOP: ${pendingCount}`} color="warning" variant="outlined" />}
               </Stack>
 
               <Typography

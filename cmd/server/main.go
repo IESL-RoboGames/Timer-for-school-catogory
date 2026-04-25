@@ -26,6 +26,8 @@ func main() {
 	mongoURI := envOrDefault("MONGODB_URI", "mongodb://localhost:27017")
 	dbName := envOrDefault("DB_NAME", "robogames")
 	port := envOrDefault("PORT", "8080")
+	adminKey := strings.TrimSpace(os.Getenv("ADMIN_KEY"))
+	enableAdminAuth := isTrue(os.Getenv("ENABLE_ADMIN_AUTH"))
 
 	// 1. Database Setup
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -49,9 +51,17 @@ func main() {
 	go hub.Run()
 
 	// 3. Handlers Setup
-	h := handlers.NewHandler(db, hub)
-	hub.OnStop = func(stopTime int64) {
-		_, _ = h.ProcessStop(stopTime)
+	h := handlers.NewHandler(db, hub, adminKey, enableAdminAuth)
+	if err := h.RecoverStateFromEvents(); err != nil {
+		log.Printf("state recovery warning: %v", err)
+	}
+
+	hub.OnStop = func(signal websocket.StopSignal) {
+		if enableAdminAuth && adminKey != "" && signal.AdminKey != adminKey {
+			log.Printf("blocked websocket STOP from source=%s due to invalid admin key", signal.Source)
+			return
+		}
+		_, _ = h.ProcessStop(signal.StopTime, signal.RequestID, signal.Source)
 	}
 
 	// 4. Router Setup
@@ -106,4 +116,13 @@ func envOrDefault(key, fallback string) string {
 		return fallback
 	}
 	return value
+}
+
+func isTrue(value string) bool {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "1", "true", "yes", "on":
+		return true
+	default:
+		return false
+	}
 }

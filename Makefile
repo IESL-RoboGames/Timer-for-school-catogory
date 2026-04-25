@@ -7,10 +7,10 @@ run-api:
 	go run cmd/server/main.go
 
 web-dev:
-	cd web && npm run dev
+	cd web && VITE_ADMIN_KEY="$${VITE_ADMIN_KEY:-$${ADMIN_KEY:-}}" npm run dev
 
 web-build:
-	cd web && npm run build
+	cd web && VITE_ADMIN_KEY="$${VITE_ADMIN_KEY:-$${ADMIN_KEY:-}}" npm run build
 
 build: web-build
 	go build -o bin/main cmd/server/main.go

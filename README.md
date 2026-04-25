@@ -20,6 +20,9 @@ Create `.env` in project root:
 MONGODB_URI=mongodb://localhost:27017
 DB_NAME=robogames
 PORT=8080
+# Optional protection (disabled by default)
+# ENABLE_ADMIN_AUTH=true
+# ADMIN_KEY=change-me
 ```
 
 ## Local Development (No Docker)
@@ -33,6 +36,11 @@ make run-api
 2. Start React frontend dev server (Vite):
 ```bash
 make web-dev
+```
+
+If you enable admin protection, set `VITE_ADMIN_KEY` in `web/.env` to match backend `ADMIN_KEY`:
+```env
+VITE_ADMIN_KEY=change-me
 ```
 
 3. Open screens:

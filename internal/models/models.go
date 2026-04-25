@@ -13,9 +13,11 @@ type Session struct {
 }
 
 type Event struct {
-	ID        primitive.ObjectID `bson:"_id,omitempty" json:"id"`
-	Type      string             `bson:"type" json:"type"` // "START", "STOP"
-	Team      string             `bson:"team" json:"team"`
-	Time      int64              `bson:"time" json:"time"`
-	Source    string             `bson:"source" json:"source"`
+	ID         primitive.ObjectID `bson:"_id,omitempty" json:"id"`
+	Type       string             `bson:"type" json:"type"` // "START", "STOP"
+	Team       string             `bson:"team" json:"team"`
+	Time       int64              `bson:"time" json:"time"`
+	Source     string             `bson:"source,omitempty" json:"source,omitempty"`
+	RequestID  string             `bson:"requestId,omitempty" json:"requestId,omitempty"`
+	RecordedAt int64              `bson:"recordedAt,omitempty" json:"recordedAt,omitempty"`
 }

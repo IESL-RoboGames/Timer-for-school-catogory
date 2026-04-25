@@ -3,6 +3,7 @@ package websocket
 import (
 	"encoding/json"
 	"log"
+	"math"
 	"net/http"
 	"sync"
 
@@ -16,8 +17,18 @@ var upgrader = websocket.Upgrader{
 }
 
 type Message struct {
-	Type     string `json:"type"`
-	StopTime int64  `json:"stopTime"`
+	Type      string  `json:"type"`
+	StopTime  float64 `json:"stopTime"`
+	RequestID string  `json:"requestId"`
+	Source    string  `json:"source"`
+	AdminKey  string  `json:"adminKey"`
+}
+
+type StopSignal struct {
+	StopTime  int64
+	RequestID string
+	Source    string
+	AdminKey  string
 }
 
 type Hub struct {
@@ -26,7 +37,7 @@ type Hub struct {
 	register   chan *websocket.Conn
 	unregister chan *websocket.Conn
 	mu         sync.Mutex
-	OnStop     func(stopTime int64)
+	OnStop     func(signal StopSignal)
 }
 
 func NewHub() *Hub {
@@ -87,7 +98,12 @@ func (h *Hub) readPump(conn *websocket.Conn) {
 		}
 
 		if msg.Type == "STOP" && h.OnStop != nil {
-			h.OnStop(msg.StopTime)
+			h.OnStop(StopSignal{
+				StopTime:  int64(math.Round(msg.StopTime)),
+				RequestID: msg.RequestID,
+				Source:    msg.Source,
+				AdminKey:  msg.AdminKey,
+			})
 		}
 	}
 }
