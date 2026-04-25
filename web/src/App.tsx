@@ -81,6 +81,9 @@ type WsEvent =
       team: string
       chargeEndTime: number
     }
+  | {
+      event: 'RESET'
+    }
 
 const API_BASE = (import.meta.env.VITE_API_BASE as string | undefined)?.replace(/\/$/, '') ?? ''
 const WS_BASE = (import.meta.env.VITE_WS_BASE as string | undefined)?.replace(/\/$/, '')
@@ -267,7 +270,7 @@ function App() {
 
   useEffect(() => {
     void syncState()
-    if (role === 'judge') {
+    if (role === 'judge' || role === 'admin') {
       void fetchResults()
     }
   }, [])
@@ -392,7 +395,7 @@ function App() {
             status: 'running',
           })
           setError(null)
-          if (role === 'judge') {
+          if (role === 'judge' || role === 'admin') {
             void fetchResults()
           }
           return
@@ -408,7 +411,7 @@ function App() {
             }
           })
           setError(null)
-          if (role === 'judge') {
+          if (role === 'judge' || role === 'admin') {
             void fetchResults()
           }
 
@@ -417,6 +420,18 @@ function App() {
               setPendingCount((prev) => Math.max(0, prev - 1))
             })
           }
+        }
+
+        if (data.event === 'RESET') {
+          setSession(null)
+          setElapsedMs(0)
+          setChargingElapsedMs(0)
+          setTeamInput('')
+          setError(null)
+          if (role === 'admin' || role === 'judge') {
+            void fetchResults()
+          }
+          return
         }
 
         if (data.event === 'CHARGE_START') {
@@ -486,7 +501,7 @@ function App() {
   }, [role, authRequired, adminToken])
 
   useEffect(() => {
-    if (role !== 'judge') {
+    if (role !== 'judge' && role !== 'admin') {
       return
     }
     const poll = window.setInterval(() => {
@@ -566,6 +581,75 @@ function App() {
     }
 
     await sendStop(item)
+  }
+
+  const resumeTimer = async () => {
+    try {
+      const response = await fetch(apiUrl('/resume'), {
+        method: 'POST',
+        headers: adminHeaders(adminToken),
+      })
+
+      if (!response.ok) {
+        let errorMessage = 'Failed to resume timer'
+        try {
+          const payload = (await response.json()) as { error?: string }
+          errorMessage = payload.error ?? errorMessage
+        } catch {
+          // Fallback if not JSON
+        }
+
+        if (response.status === 401) {
+          setAdminToken('')
+          window.localStorage.removeItem(ADMIN_TOKEN_STORAGE_KEY)
+        }
+        setError(errorMessage)
+        return
+      }
+
+      const next = (await response.json()) as Session
+      setSession(next)
+      setError(null)
+    } catch (err) {
+      console.error('Resume error:', err)
+      setError('Cannot reach backend when resuming timer.')
+    }
+  }
+
+  const resetTimer = async () => {
+    try {
+      const response = await fetch(apiUrl('/reset'), {
+        method: 'POST',
+        headers: adminHeaders(adminToken),
+      })
+
+      if (!response.ok) {
+        let errorMessage = 'Failed to reset timer'
+        try {
+          const payload = (await response.json()) as { error?: string }
+          errorMessage = payload.error ?? errorMessage
+        } catch {
+          // Fallback if not JSON
+        }
+
+        if (response.status === 401) {
+          setAdminToken('')
+          window.localStorage.removeItem(ADMIN_TOKEN_STORAGE_KEY)
+        }
+        setError(errorMessage)
+        return
+      }
+
+      setSession(null)
+      setElapsedMs(0)
+      setChargingElapsedMs(0)
+      setTeamInput('')
+      setError(null)
+      void fetchResults()
+    } catch (err) {
+      console.error('Reset error:', err)
+      setError('Cannot reach backend when resetting timer.')
+    }
   }
 
   const loginAdmin = async () => {
@@ -759,11 +843,26 @@ function App() {
                     autoComplete="off"
                   />
                   <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1.5}>
-                    <Button variant="contained" size="large" onClick={startTimer} disabled={session?.status === 'running'}>
+                    <Button variant="contained" size="large" onClick={startTimer} disabled={session?.status === 'running'} fullWidth>
                       Start Timer
                     </Button>
-                    <Button variant="contained" color="error" size="large" onClick={stopTimer} disabled={session?.status !== 'running'}>
+                    <Button variant="contained" color="error" size="large" onClick={stopTimer} disabled={session?.status !== 'running'} fullWidth>
                       Stop Timer
+                    </Button>
+                  </Stack>
+                  <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1.5}>
+                    <Button
+                      variant="contained"
+                      color="warning"
+                      size="large"
+                      onClick={resumeTimer}
+                      disabled={session?.status !== 'finished'}
+                      fullWidth
+                    >
+                      Resume
+                    </Button>
+                    <Button variant="outlined" color="error" size="large" onClick={resetTimer} fullWidth>
+                      Reset
                     </Button>
                   </Stack>
                   <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1.5}>
@@ -772,6 +871,7 @@ function App() {
                       size="large"
                       onClick={startCharging}
                       disabled={session?.status !== 'running' || session?.chargeStatus === 'running'}
+                      fullWidth
                     >
                       Start Charging
                     </Button>
@@ -781,6 +881,7 @@ function App() {
                       size="large"
                       onClick={stopCharging}
                       disabled={session?.chargeStatus !== 'running'}
+                      fullWidth
                     >
                       Stop Charging
                     </Button>
@@ -788,7 +889,7 @@ function App() {
                 </Stack>
               )}
 
-              {role === 'judge' && (
+              {(role === 'judge' || role === 'admin') && (
                 <TableContainer component={Paper} variant="outlined" sx={{ width: '100%', maxWidth: 760 }}>
                   <Table size="small">
                     <TableHead>

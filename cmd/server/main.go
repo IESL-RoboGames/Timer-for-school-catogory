@@ -74,6 +74,8 @@ func main() {
 	r.POST("/auth/login", h.AdminLogin)
 	r.POST("/start", h.StartTimer)
 	r.POST("/stop", h.StopTimer)
+	r.POST("/resume", h.ResumeTimer)
+	r.POST("/reset", h.ResetTimer)
 	r.POST("/charge/start", h.StartChargingTimer)
 	r.POST("/charge/stop", h.StopChargingTimer)
 	r.GET("/state", h.GetState)

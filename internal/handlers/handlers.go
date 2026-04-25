@@ -450,6 +450,96 @@ func (h *Handler) RecoverStateFromEvents() error {
 	return err
 }
 
+func (h *Handler) ResumeTimer(c *gin.Context) {
+	if !h.authorizeAdmin(c) {
+		return
+	}
+
+	dbCtx, cancel := context.WithTimeout(context.Background(), mongoOpTimeout)
+	defer cancel()
+
+	latest, err := h.getLatestSession()
+	if err != nil || latest == nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "no session found to resume"})
+		return
+	}
+
+	if latest.Status != "finished" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "only finished sessions can be resumed"})
+		return
+	}
+
+	elapsed := latest.EndTime - latest.StartTime
+	if elapsed < 0 {
+		elapsed = 0
+	}
+	newStartTime := time.Now().UnixMilli() - elapsed
+
+	update := bson.M{
+		"$set": bson.M{
+			"startTime": newStartTime,
+			"status":    "running",
+		},
+		"$unset": bson.M{
+			"endTime": "",
+		},
+	}
+
+	opts := options.FindOneAndUpdate().SetReturnDocument(options.After)
+	var updatedSession models.Session
+	err = h.db.Collection("sessions").FindOneAndUpdate(dbCtx, bson.M{"_id": latest.ID}, update, opts).Decode(&updatedSession)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	event := models.Event{
+		Type:       "RESUME",
+		Team:       updatedSession.Team,
+		Time:       time.Now().UnixMilli(),
+		Source:     "admin-http",
+		RecordedAt: time.Now().UnixMilli(),
+	}
+	_, _ = h.db.Collection("events").InsertOne(dbCtx, event)
+
+	h.hub.Broadcast(gin.H{
+		"event":     "START",
+		"team":      updatedSession.Team,
+		"startTime": updatedSession.StartTime,
+		"sessionId": updatedSession.ID,
+	})
+
+	c.JSON(http.StatusOK, updatedSession)
+}
+
+func (h *Handler) ResetTimer(c *gin.Context) {
+	if !h.authorizeAdmin(c) {
+		return
+	}
+
+	dbCtx, cancel := context.WithTimeout(context.Background(), mongoOpTimeout)
+	defer cancel()
+
+	latest, err := h.getLatestSession()
+	if err == nil && latest != nil {
+		_, _ = h.db.Collection("sessions").UpdateByID(dbCtx, latest.ID, bson.M{
+			"$set": bson.M{"status": "cancelled"},
+		})
+
+		event := models.Event{
+			Type:       "RESET",
+			Team:       latest.Team,
+			Time:       time.Now().UnixMilli(),
+			Source:     "admin-http",
+			RecordedAt: time.Now().UnixMilli(),
+		}
+		_, _ = h.db.Collection("events").InsertOne(dbCtx, event)
+	}
+
+	h.hub.Broadcast(gin.H{"event": "RESET"})
+	c.JSON(http.StatusOK, gin.H{"status": "ok"})
+}
+
 func (h *Handler) GetState(c *gin.Context) {
 	_ = h.RecoverStateFromEvents()
 
@@ -472,6 +562,10 @@ func (h *Handler) GetState(c *gin.Context) {
 			"authRequired": h.requireAuth,
 		})
 		return
+	}
+
+	if session != nil && session.Status == "cancelled" {
+		session = nil
 	}
 
 	c.JSON(http.StatusOK, gin.H{

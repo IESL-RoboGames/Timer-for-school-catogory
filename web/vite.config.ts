@@ -17,6 +17,12 @@ export default defineConfig({
       '/stop': {
         target: 'http://localhost:8080',
       },
+      '/resume': {
+        target: 'http://localhost:8080',
+      },
+      '/reset': {
+        target: 'http://localhost:8080',
+      },
       '/charge/start': {
         target: 'http://localhost:8080',
       },
