@@ -1,0 +1,64 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Public - RoboGames Timer</title>
+    <style>
+        body { 
+            background: #000; 
+            color: #fff; 
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            height: 100vh;
+            margin: 0;
+            overflow: hidden;
+        }
+        #team-name { font-size: 5vw; margin-bottom: 20px; color: #aaa; text-transform: uppercase; }
+        #timer-display { font-size: 25vw; font-weight: bold; font-family: 'Courier New', Courier, monospace; line-height: 1; }
+        .running #timer-display { color: #0f0; }
+        .finished #timer-display { color: #f00; }
+    </style>
+</head>
+<body class="idle">
+    <div id="team-name">READY</div>
+    <div id="timer-display">00:00.0</div>
+
+    <script src="../common.js"></script>
+    <script>
+        async function init() {
+            const data = await syncTime();
+            if (data && data.session) {
+                updateUI(data.session);
+            }
+            connectWebSocket(handleMessage);
+        }
+
+        function handleMessage(data) {
+            if (data.event === "START") {
+                updateUI({ team: data.team, startTime: data.startTime, status: "running" });
+            } else if (data.event === "STOP") {
+                updateUI({ team: data.team, startTime: currentSession.startTime, endTime: data.endTime, status: "finished" });
+            }
+        }
+
+        function updateUI(session) {
+            currentSession = session;
+            document.getElementById('team-name').innerText = session.team;
+            
+            if (session.status === "running") {
+                document.body.className = 'running';
+                updateTimerDisplay(session.startTime, null, 'timer-display');
+            } else {
+                document.body.className = 'finished';
+                updateTimerDisplay(session.startTime, session.endTime, 'timer-display');
+            }
+        }
+
+        init();
+    </script>
+</body>
+</html>

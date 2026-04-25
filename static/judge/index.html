@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Judge - RoboGames Timer</title>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/water.css@2/out/water.css">
+    <style>
+        .timer { font-size: 5rem; font-weight: bold; margin: 20px 0; font-family: monospace; }
+        .status { padding: 20px; border-radius: 10px; font-size: 1.5rem; text-align: center; }
+        .status.running { background: #d4edda; color: #155724; }
+        .status.finished { background: #f8d7da; color: #721c24; }
+    </style>
+</head>
+<body>
+    <h1>Judge Dashboard</h1>
+    
+    <div id="display-area">
+        <h2 id="team-name">Waiting for session...</h2>
+        <div id="timer-display" class="timer">00:00.0</div>
+        <div id="status-box" class="status" style="display:none;"></div>
+    </div>
+
+    <script src="../common.js"></script>
+    <script>
+        async function init() {
+            const data = await syncTime();
+            if (data && data.session) {
+                updateUI(data.session);
+            }
+            connectWebSocket(handleMessage);
+        }
+
+        function handleMessage(data) {
+            if (data.event === "START") {
+                updateUI({ team: data.team, startTime: data.startTime, status: "running" });
+            } else if (data.event === "STOP") {
+                updateUI({ team: data.team, startTime: currentSession.startTime, endTime: data.endTime, status: "finished" });
+            }
+        }
+
+        function updateUI(session) {
+            currentSession = session;
+            document.getElementById('team-name').innerText = `Team: ${session.team}`;
+            const statusBox = document.getElementById('status-box');
+            statusBox.style.display = 'block';
+
+            if (session.status === "running") {
+                statusBox.className = 'status running';
+                statusBox.innerText = 'IN PROGRESS';
+                updateTimerDisplay(session.startTime, null, 'timer-display');
+            } else {
+                statusBox.className = 'status finished';
+                statusBox.innerText = 'FINISHED';
+                updateTimerDisplay(session.startTime, session.endTime, 'timer-display');
+            }
+        }
+
+        init();
+    </script>
+</body>
+</html>

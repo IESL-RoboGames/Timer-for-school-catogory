@@ -1,0 +1,12 @@
+# Binaries
+bin/
+main
+
+# Environment
+.env
+
+# Dependencies
+vendor/
+
+# OS files
+.DS_Store

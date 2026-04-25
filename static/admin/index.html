@@ -1,0 +1,140 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Admin - RoboGames Timer</title>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/water.css@2/out/water.css">
+    <style>
+        .timer { font-size: 4rem; font-weight: bold; margin: 20px 0; font-family: monospace; }
+        .controls { display: flex; gap: 10px; }
+        .status { margin-top: 20px; padding: 10px; border-radius: 5px; }
+        .status.running { background: #d4edda; color: #155724; }
+        .status.finished { background: #f8d7da; color: #721c24; }
+    </style>
+</head>
+<body>
+    <h1>RoboGames Timer Admin</h1>
+    
+    <div id="setup">
+        <label for="team-name">Team Name:</label>
+        <input type="text" id="team-name" placeholder="Enter team name">
+        <button id="start-btn" onclick="startTimer()">START TIMER</button>
+    </div>
+
+    <div id="active" style="display:none;">
+        <h2 id="display-team"></h2>
+        <div id="timer-display" class="timer">00:00.0</div>
+        <div class="controls">
+            <button id="stop-btn" onclick="handleStop()" style="background: #dc3545; color: white;">STOP TIMER</button>
+        </div>
+    </div>
+
+    <div id="status-box" class="status" style="display:none;"></div>
+
+    <script src="../common.js"></script>
+    <script>
+        let ws = null;
+        let pendingStop = null;
+
+        async function init() {
+            const data = await syncTime();
+            if (data && data.session) {
+                updateUI(data.session);
+            }
+            ws = connectWebSocket(handleMessage);
+            
+            // Retry loop for pending stop
+            setInterval(retryStop, 2000);
+        }
+
+        function handleMessage(data) {
+            if (data.event === "START") {
+                updateUI({ team: data.team, startTime: data.startTime, status: "running" });
+            } else if (data.event === "STOP") {
+                updateUI({ team: data.team, startTime: currentSession.startTime, endTime: data.endTime, status: "finished" });
+                pendingStop = null;
+            }
+        }
+
+        function updateUI(session) {
+            if (!session) return;
+            currentSession = session;
+            const setupDiv = document.getElementById('setup');
+            const activeDiv = document.getElementById('active');
+            const statusBox = document.getElementById('status-box');
+            const teamDisplay = document.getElementById('display-team');
+
+            if (session.status === "running") {
+                setupDiv.style.display = 'none';
+                activeDiv.style.display = 'block';
+                teamDisplay.innerText = `Team: ${session.team}`;
+                statusBox.style.display = 'block';
+                statusBox.className = 'status running';
+                statusBox.innerText = 'STATUS: RUNNING';
+                updateTimerDisplay(session.startTime, null, 'timer-display');
+            } else if (session.status === "finished") {
+                setupDiv.style.display = 'block';
+                activeDiv.style.display = 'block'; // Show last result
+                teamDisplay.innerText = `Last Team: ${session.team}`;
+                statusBox.style.display = 'block';
+                statusBox.className = 'status finished';
+                statusBox.innerText = `FINISHED: ${formatTime(session.endTime - session.startTime)}`;
+                updateTimerDisplay(session.startTime, session.endTime, 'timer-display');
+            }
+        }
+
+        async function startTimer() {
+            const team = document.getElementById('team-name').value;
+            if (!team) return alert("Enter team name");
+
+            const res = await fetch('/start', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ team })
+            });
+            const session = await res.json();
+            updateUI(session);
+        }
+
+        async function handleStop() {
+            const stopTime = getServerNow();
+            pendingStop = stopTime;
+            
+            // 1. WebSocket attempt
+            if (ws && ws.readyState === WebSocket.OPEN) {
+                ws.send(JSON.stringify({ type: "STOP", stopTime }));
+            }
+
+            // 2. HTTP attempt
+            sendStopRequest(stopTime);
+        }
+
+        async function sendStopRequest(stopTime) {
+            try {
+                const res = await fetch('/stop', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ stopTime })
+                });
+                if (res.ok) {
+                    const session = await res.json();
+                    updateUI(session);
+                    pendingStop = null;
+                }
+            } catch (e) {
+                console.error("HTTP stop failed", e);
+            }
+        }
+
+        function retryStop() {
+            if (pendingStop) {
+                console.log("Retrying stop...");
+                sendStopRequest(pendingStop);
+            }
+        }
+
+        init();
+    </script>
+</body>
+</html>
