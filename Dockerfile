@@ -7,7 +7,7 @@ COPY web/ ./
 RUN npm run build
 
 # Stage 2: Build the Go Backend
-FROM golang:1.26-alpine AS backend-builder
+FROM docker.io/library/golang:1.25-alpine AS backend-builder
 WORKDIR /app
 COPY go.mod go.sum ./
 RUN go mod download
@@ -15,7 +15,7 @@ COPY . .
 RUN go build -o server ./cmd/server/main.go
 
 # Stage 3: Final Production Image
-FROM alpine:latest
+FROM docker.io/library/alpine:latest
 WORKDIR /app
 
 # Install runtime dependencies
