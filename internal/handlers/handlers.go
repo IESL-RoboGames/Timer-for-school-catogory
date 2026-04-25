@@ -334,6 +334,7 @@ func (h *Handler) ProcessStop(stopTime int64, requestID, source string) (*models
 		return nil, err
 	}
 
+	var autoStoppedCharge bool
 	if updatedSession.ChargeStatus == "running" {
 		autoStopCtx, autoStopCancel := context.WithTimeout(context.Background(), mongoOpTimeout)
 		defer autoStopCancel()
@@ -345,6 +346,7 @@ func (h *Handler) ProcessStop(stopTime int64, requestID, source string) (*models
 		})
 		updatedSession.ChargeEndTime = stopTime
 		updatedSession.ChargeStatus = "finished"
+		autoStoppedCharge = true
 	}
 
 	// Log event
@@ -369,7 +371,7 @@ func (h *Handler) ProcessStop(stopTime int64, requestID, source string) (*models
 		"source":    source,
 	})
 
-	if updatedSession.ChargeEndTime > 0 {
+	if autoStoppedCharge {
 		h.hub.Broadcast(gin.H{
 			"event":         "CHARGE_STOP",
 			"team":          updatedSession.Team,

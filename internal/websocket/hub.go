@@ -87,7 +87,10 @@ func (h *Hub) readPump(conn *websocket.Conn) {
 	for {
 		_, message, err := conn.ReadMessage()
 		if err != nil {
-			log.Printf("error: %v", err)
+			// Ignore normal websocket closes from refresh/navigation.
+			if websocket.IsUnexpectedCloseError(err, websocket.CloseNormalClosure, websocket.CloseGoingAway, websocket.CloseAbnormalClosure) {
+				log.Printf("websocket read error: %v", err)
+			}
 			break
 		}
 

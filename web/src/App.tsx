@@ -225,6 +225,28 @@ function App() {
   const wsRef = useRef<WebSocket | null>(null)
   const retryInFlightRef = useRef(false)
 
+  const syncState = async () => {
+    const requestStart = Date.now()
+    try {
+      const response = await fetch(apiUrl('/state'))
+      const data = (await response.json()) as StateResponse
+      const requestEnd = Date.now()
+      const offset = (data.serverTime ?? Date.now()) - (requestStart + requestEnd) / 2
+      setServerOffset(offset)
+      setAuthRequired(Boolean(data.authRequired))
+
+      if (data.error) {
+        setError(data.error)
+      } else {
+        setError(null)
+      }
+
+      setSession(data.session ?? null)
+    } catch {
+      setError('Unable to reach backend. Make sure Go server is running.')
+    }
+  }
+
   useEffect(() => {
     currentSessionRef.current = session
   }, [session])
@@ -244,33 +266,7 @@ function App() {
   }
 
   useEffect(() => {
-    const syncTime = async () => {
-      const requestStart = Date.now()
-      try {
-        const response = await fetch(apiUrl('/state'))
-        const data = (await response.json()) as StateResponse
-        const requestEnd = Date.now()
-        const offset = (data.serverTime ?? Date.now()) - (requestStart + requestEnd) / 2
-        setServerOffset(offset)
-        setAuthRequired(Boolean(data.authRequired))
-
-        if (data.error) {
-          setError(data.error)
-        } else {
-          setError(null)
-        }
-
-        if (data.session) {
-          setSession(data.session)
-        } else {
-          setSession(null)
-        }
-      } catch {
-        setError('Unable to reach backend. Make sure Go server is running.')
-      }
-    }
-
-    void syncTime()
+    void syncState()
     if (role === 'judge') {
       void fetchResults()
     }
@@ -383,18 +379,18 @@ function App() {
 
       ws.onopen = () => {
         setWsConnected(true)
+        void syncState()
       }
 
       ws.onmessage = (event) => {
         const data = JSON.parse(event.data) as WsEvent
 
         if (data.event === 'START') {
-          const next: Session = {
+          setSession({
             team: data.team,
             startTime: data.startTime,
             status: 'running',
-          }
-          setSession(next)
+          })
           setError(null)
           if (role === 'judge') {
             void fetchResults()
@@ -403,15 +399,13 @@ function App() {
         }
 
         if (data.event === 'STOP') {
-          const current = currentSessionRef.current
-          if (!current) {
-            return
-          }
-
-          setSession({
-            ...current,
-            status: 'finished',
-            endTime: data.endTime,
+          setSession((prev) => {
+            if (!prev) return prev
+            return {
+              ...prev,
+              status: 'finished',
+              endTime: data.endTime,
+            }
           })
           setError(null)
           if (role === 'judge') {
@@ -426,28 +420,26 @@ function App() {
         }
 
         if (data.event === 'CHARGE_START') {
-          const current = currentSessionRef.current
-          if (!current) {
-            return
-          }
-          setSession({
-            ...current,
-            chargeStartTime: data.chargeStartTime,
-            chargeEndTime: undefined,
-            chargeStatus: 'running',
+          setSession((prev) => {
+            if (!prev) return prev
+            return {
+              ...prev,
+              chargeStartTime: data.chargeStartTime,
+              chargeEndTime: undefined,
+              chargeStatus: 'running',
+            }
           })
           return
         }
 
         if (data.event === 'CHARGE_STOP') {
-          const current = currentSessionRef.current
-          if (!current || !current.chargeStartTime) {
-            return
-          }
-          setSession({
-            ...current,
-            chargeEndTime: data.chargeEndTime,
-            chargeStatus: 'finished',
+          setSession((prev) => {
+            if (!prev) return prev
+            return {
+              ...prev,
+              chargeEndTime: data.chargeEndTime,
+              chargeStatus: 'finished',
+            }
           })
         }
       }
@@ -459,6 +451,7 @@ function App() {
       ws.onclose = () => {
         setWsConnected(false)
         if (!closedByCleanup) {
+          void syncState()
           reconnectTimer = window.setTimeout(connect, 2000)
         }
       }
