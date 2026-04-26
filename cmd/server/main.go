@@ -90,6 +90,8 @@ func main() {
 		r.Static("/assets", "./web/dist/assets")
 		r.StaticFile("/favicon.svg", "./web/dist/favicon.svg")
 		r.StaticFile("/icons.svg", "./web/dist/icons.svg")
+		r.StaticFile("/RoboGames_logo.avif", "./web/dist/RoboGames_logo.avif")
+		r.StaticFile("/cse.avif", "./web/dist/cse.avif")
 
 		r.GET("/", func(c *gin.Context) {
 			c.Redirect(http.StatusTemporaryRedirect, "/admin")
