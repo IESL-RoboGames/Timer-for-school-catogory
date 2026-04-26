@@ -16,7 +16,7 @@ export function PublicPage({ session, elapsedMs, chargingMs, selectedTeam, selec
   const [isFullscreen, setIsFullscreen] = useState(false)
   const displayTeam = session?.team || selectedTeam
   const displayRound = session?.round || selectedRound
-  const logoSize = { xs: 44, sm: 56, md: 64 }
+  const logoSize = { xs: 60, sm: 76, md: 92 }
 
   const toggleFullscreen = () => {
     if (!document.fullscreenElement) {
