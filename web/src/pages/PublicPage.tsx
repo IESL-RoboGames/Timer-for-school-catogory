@@ -16,6 +16,7 @@ export function PublicPage({ session, elapsedMs, chargingMs, selectedTeam, selec
   const [isFullscreen, setIsFullscreen] = useState(false)
   const displayTeam = session?.team || selectedTeam
   const displayRound = session?.round || selectedRound
+  const logoSize = { xs: 44, sm: 56, md: 64 }
 
   const toggleFullscreen = () => {
     if (!document.fullscreenElement) {
@@ -47,10 +48,44 @@ export function PublicPage({ session, elapsedMs, chargingMs, selectedTeam, selec
     }}>
       <IconButton 
         onClick={toggleFullscreen}
-        sx={{ position: 'absolute', top: 20, right: 20, color: 'rgba(255,255,255,0.2)' }}
+        sx={{ position: 'absolute', top: { xs: 76, sm: 88 }, right: 20, color: 'rgba(255,255,255,0.2)' }}
       >
         {isFullscreen ? <FullscreenExitIcon /> : <FullscreenIcon />}
       </IconButton>
+
+      <Box
+        component="img"
+        src="/RoboGames_logo.avif"
+        alt="RoboGames logo"
+        sx={{
+          position: 'absolute',
+          top: { xs: 12, sm: 16 },
+          left: { xs: 12, sm: 16 },
+          width: logoSize,
+          height: 'auto',
+          objectFit: 'contain',
+          opacity: 0.95,
+          userSelect: 'none',
+          pointerEvents: 'none'
+        }}
+      />
+
+      <Box
+        component="img"
+        src="/cse.avif"
+        alt="CSE logo"
+        sx={{
+          position: 'absolute',
+          top: { xs: 12, sm: 16 },
+          right: { xs: 12, sm: 16 },
+          width: logoSize,
+          height: 'auto',
+          objectFit: 'contain',
+          opacity: 0.95,
+          userSelect: 'none',
+          pointerEvents: 'none'
+        }}
+      />
 
       <Stack spacing={{ xs: 1, md: 2 }} sx={{ alignItems: 'center', width: '100%' }}>
         <TimerDisplay ms={elapsedMs} isFinished={session?.status === 'finished'} isRunning={session?.status === 'running'} />
